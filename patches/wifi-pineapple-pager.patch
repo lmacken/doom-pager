@@ -1,6 +1,6 @@
 diff --git a/doomgeneric/Makefile.mipsel b/doomgeneric/Makefile.mipsel
 new file mode 100644
-index 0000000..60cb9e5
+index 0000000..79ad9c6
 --- /dev/null
 +++ b/doomgeneric/Makefile.mipsel
 @@ -0,0 +1,67 @@
@@ -25,15 +25,15 @@ index 0000000..60cb9e5
 +# Widen FOV to compensate for aspect ratio stretch (480/320)/(222/200) = 1.35x
 +# Original FOV is 2048, adjusted: 2048 * 1.35 = 2765
 +CFLAGS+=-DFIELDOFVIEW=2765
-+# Optimize for speed, enable MIPS-specific opts
-+# -march=24kec: Target MIPS 24KEc CPU with DSP extensions
-+# -mtune=24kec: Optimize scheduling for 24KEc
-+# -mdsp: Enable MIPS DSP ASE instructions
-+# -ffast-math: Faster floating point (we use soft-float anyway)
-+# -funroll-loops: Unroll small loops for speed
++# Optimize for size to reduce memory pressure
++# -Os: Optimize for size (smaller code = less cache/memory use)
++# -march=24kec: Target MIPS 24KEc CPU
 +# -fomit-frame-pointer: Free up a register
-+CFLAGS+=-O3 -Wall -DNORMALUNIX -DLINUX -D_DEFAULT_SOURCE
-+CFLAGS+=-march=24kec -mtune=24kec -mdsp -ffast-math -funroll-loops -fomit-frame-pointer
++# -ffunction-sections -fdata-sections: Allow linker to remove unused code
++CFLAGS+=-Os -Wall -DNORMALUNIX -DLINUX -D_DEFAULT_SOURCE
++CFLAGS+=-march=24kec -mtune=24kec -ffast-math -fomit-frame-pointer
++CFLAGS+=-ffunction-sections -fdata-sections
++LDFLAGS+=-Wl,--gc-sections
 +LDFLAGS+=-static
 +LIBS+=-lm -lc
 +
@@ -72,7 +72,7 @@ index 0000000..60cb9e5
 +	@echo OBJS: $(OBJS)
 +
 diff --git a/doomgeneric/doomgeneric_linuxvt.c b/doomgeneric/doomgeneric_linuxvt.c
-index ed94dd9..ea2f542 100644
+index ed94dd9..cdc5f6a 100644
 --- a/doomgeneric/doomgeneric_linuxvt.c
 +++ b/doomgeneric/doomgeneric_linuxvt.c
 @@ -6,6 +6,8 @@
@@ -102,12 +102,11 @@ index ed94dd9..ea2f542 100644
  
  #include <stdbool.h>
  
-@@ -74,8 +80,45 @@ static struct timeval startTime;
+@@ -74,8 +80,43 @@ static struct timeval startTime;
  
  // framebuffer stuff 
  static uint8_t *fbPtr;
 +static uint16_t *renderBuffer = NULL;  // Local render buffer for 16-bit mode
-+static uint16_t *prevBuffer = NULL;    // Previous frame for dirty detection
 +static unsigned int renderBufferSize = 0;
  static int fbFd;
 +static int ttyFd = -1;  // TTY for graphics mode switching
@@ -137,7 +136,6 @@ index ed94dd9..ea2f542 100644
 +		close(ttyFd);
 +	}
 +	if (renderBuffer) free(renderBuffer);
-+	if (prevBuffer) free(prevBuffer);
 +	if (srcXLookup) free(srcXLookup);
 +	if (srcYLookup) free(srcYLookup);
 +	if (srcXLookupAspect) free(srcXLookupAspect);
@@ -148,7 +146,7 @@ index ed94dd9..ea2f542 100644
  
  // input stuff
  static int numInputFds = 0;
-@@ -87,6 +130,16 @@ static unsigned short s_KeyQueue[KEYQUEUE_SIZE];
+@@ -87,6 +128,16 @@ static unsigned short s_KeyQueue[KEYQUEUE_SIZE];
  static unsigned int s_KeyQueueWriteIndex = 0;
  static unsigned int s_KeyQueueReadIndex = 0;
  
@@ -165,7 +163,7 @@ index ed94dd9..ea2f542 100644
  // XXX: HACK
  // Linux's evdev system doesn't make it feasible to just use
  // tolower(key) like the existing conversions did, so we
-@@ -197,6 +250,14 @@ static unsigned char convertToDoomKey(unsigned int key){
+@@ -197,6 +248,14 @@ static unsigned char convertToDoomKey(unsigned int key){
  			key = DOOM_KEY_TAB;
  			break;
  
@@ -180,7 +178,7 @@ index ed94dd9..ea2f542 100644
  		// sadly, yes, we need to handle every single alphanumeric
  		// key here, since evdev doesn't spit out keys in anything
  		// remotely resembling ASCII.....
-@@ -273,11 +334,73 @@ static unsigned char convertToDoomKey(unsigned int key){
+@@ -273,11 +332,73 @@ static unsigned char convertToDoomKey(unsigned int key){
  	return key;
  }
  
@@ -255,7 +253,7 @@ index ed94dd9..ea2f542 100644
  		
  	unsigned char key = convertToDoomKey(keyCode);
  	if (key == 0xFF) // unknown, don't process it
-@@ -353,10 +476,17 @@ static int isKeyboard(const char *devPath) {
+@@ -353,10 +474,17 @@ static int isKeyboard(const char *devPath) {
  		return 0;
  	}
  
@@ -273,7 +271,7 @@ index ed94dd9..ea2f542 100644
  
  	close(fd);
  	return 0;
-@@ -409,6 +539,30 @@ void DG_Init() {
+@@ -409,6 +537,30 @@ void DG_Init() {
  	struct fb_var_screeninfo info;
  	struct fb_fix_screeninfo finfo;
  
@@ -304,7 +302,7 @@ index ed94dd9..ea2f542 100644
  	//
  	// set up the framebuffer
  	//
-@@ -434,19 +588,102 @@ void DG_Init() {
+@@ -434,19 +586,96 @@ void DG_Init() {
  	fbWidth = info.xres;
  	fbHeight = info.yres;
  	fbBytesPerPixel = info.bits_per_pixel / 8;
@@ -320,12 +318,6 @@ index ed94dd9..ea2f542 100644
 +		if (!renderBuffer)
 +			I_Error("Failed to allocate render buffer");
 +		memset(renderBuffer, 0, renderBufferSize);
-+		
-+		// Allocate previous frame buffer for dirty detection
-+		prevBuffer = (uint16_t *)malloc(renderBufferSize);
-+		if (!prevBuffer)
-+			I_Error("Failed to allocate previous frame buffer");
-+		memset(prevBuffer, 0, renderBufferSize);
 +		
 +		// Clear the display
 +		lseek(fbFd, 0, SEEK_SET);
@@ -417,7 +409,7 @@ index ed94dd9..ea2f542 100644
  
  	//
  	// set up input
-@@ -460,16 +697,88 @@ void DG_Init() {
+@@ -460,16 +689,62 @@ void DG_Init() {
  	gettimeofday(&startTime, NULL);
  }
  
@@ -471,35 +463,9 @@ index ed94dd9..ea2f542 100644
 +			}
 +		}
 +		
-+		// Dirty region detection: find first and last changed rows
-+		if (prevBuffer) {
-+			unsigned int firstDirty = fbHeight;
-+			unsigned int lastDirty = 0;
-+			size_t rowBytes = fbWidth * sizeof(uint16_t);
-+			
-+			for (unsigned int y = 0; y < fbHeight; y++) {
-+				if (memcmp(renderBuffer + y * fbWidth, prevBuffer + y * fbWidth, rowBytes) != 0) {
-+					if (y < firstDirty) firstDirty = y;
-+					lastDirty = y;
-+				}
-+			}
-+			
-+			if (firstDirty <= lastDirty) {
-+				// Write only the changed region
-+				size_t offset = firstDirty * rowBytes;
-+				size_t length = (lastDirty - firstDirty + 1) * rowBytes;
-+				lseek(fbFd, offset, SEEK_SET);
-+				write(fbFd, renderBuffer + firstDirty * fbWidth, length);
-+			}
-+			// else: nothing changed, skip write entirely
-+			
-+			// Copy current frame to previous for next comparison
-+			memcpy(prevBuffer, renderBuffer, renderBufferSize);
-+		} else {
-+			// No previous buffer, write everything
-+			lseek(fbFd, 0, SEEK_SET);
-+			write(fbFd, renderBuffer, renderBufferSize);
-+		}
++		// Write frame to display
++		lseek(fbFd, 0, SEEK_SET);
++		write(fbFd, renderBuffer, renderBufferSize);
 +	} else {
 +		// Original 32-bit mmap path
 +		for (int line = 0; line < DOOMGENERIC_RESY; line++) {
