@@ -57,7 +57,7 @@ fi
 # Apply patches
 echo "[*] Applying patches..."
 cd "$BUILD_DIR/doomgeneric"
-git apply "$SCRIPT_DIR/patches/doomgeneric-pager.patch"
+git apply "$SCRIPT_DIR/patches/wifi-pineapple-pager.patch"
 echo "[✓] Patches applied"
 
 # Build
