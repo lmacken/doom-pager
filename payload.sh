@@ -25,23 +25,12 @@ fi
 # Make sure it's executable
 chmod +x "$PAYLOAD_DIR/doomgeneric" 2>/dev/null
 
-# Try to find a WAD file
-WAD_FILE=""
-for wad in freedoom1.wad freedoom2.wad doom1.wad doom.wad doom2.wad; do
-    if [ -f "$PAYLOAD_DIR/$wad" ]; then
-        WAD_FILE="$PAYLOAD_DIR/$wad"
-        break
-    fi
-done
+# Find first WAD file
+WAD_FILE=$(ls "$PAYLOAD_DIR"/*.wad 2>/dev/null | head -1)
 
 if [ -z "$WAD_FILE" ]; then
-    LOG red "ERROR: No WAD file found!"
-    LOG ""
-    LOG "Please place a WAD file in this directory:"
-    LOG "  - freedoom1.wad or freedoom2.wad (free, from https://freedoom.github.io/)"
-    LOG "  - doom1.wad, doom.wad, or doom2.wad (if you own Doom)"
-    LOG ""
-    LOG "Press any button to exit..."
+    LOG red "ERROR: No .wad file found!"
+    LOG "Place a WAD file in $PAYLOAD_DIR"
     WAIT_FOR_INPUT >/dev/null 2>&1
     exit 1
 fi
