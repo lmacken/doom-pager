@@ -1,6 +1,6 @@
 #!/bin/bash
-# Title: Doom
-# Description: Play the classic Doom game on your WiFi Pineapple Pager!
+# Title: DOOM
+# Description: The classic 1993 FPS on your WiFi Pineapple Pager!
 # Author: Doom Port for WiFi Pineapple Pager
 # Version: 1.0
 # Category: Games
@@ -46,7 +46,7 @@ if [ -z "$WAD_FILE" ]; then
     exit 1
 fi
 
-LOG green "Starting Doom..."
+LOG green "Starting DOOM..."
 LOG "Using WAD file: $WAD_FILE"
 LOG ""
 LOG "Controls:"
@@ -81,7 +81,7 @@ dd if=/dev/zero of=/dev/fb0 bs=213120 count=1 2>/dev/null
 
 # Return to menu when Doom exits
 LOG ""
-LOG "Doom has exited."
+LOG "DOOM has exited."
 LOG "Press any button to return to menu..."
 WAIT_FOR_INPUT >/dev/null 2>&1
 
