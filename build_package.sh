@@ -59,12 +59,18 @@ echo "  Build successful!"
 ls -lh "${DOOM_DIR}/doomgeneric"
 echo ""
 
-# WAD files are NOT included in the package for legal reasons
-# Users must provide their own WAD files (doom1.wad, doom.wad, doom2.wad, etc.)
-# or use free alternatives like Freedoom
-echo "Note: WAD files are not included in the package."
-echo "Users must provide their own WAD files. See INSTALL.md for details."
+# doom1.wad (shareware) is freely distributable and can be included
 WAD_FILE=""
+if [ -f "${DOOM_DIR}/doom1.wad" ]; then
+    echo "  Found doom1.wad (shareware) - will include in package"
+    WAD_FILE="${DOOM_DIR}/doom1.wad"
+elif [ -f "${SCRIPT_DIR}/doom1.wad" ]; then
+    echo "  Found doom1.wad (shareware) - will include in package"
+    WAD_FILE="${SCRIPT_DIR}/doom1.wad"
+else
+    echo "Note: doom1.wad not found. Package will not include WAD file."
+    echo "Users can use Freedoom or provide their own WAD. See INSTALL.md"
+fi
 
 # Create package directory
 echo "Step 2: Creating package structure..."
@@ -74,6 +80,12 @@ mkdir -p "${PACKAGE_DIR}"
 # Copy files
 echo "  Copying binary..."
 cp "${DOOM_DIR}/doomgeneric" "${PACKAGE_DIR}/"
+
+# Copy WAD file if available (doom1.wad shareware is freely distributable)
+if [ -n "$WAD_FILE" ] && [ -f "$WAD_FILE" ]; then
+    echo "  Copying doom1.wad (shareware - freely distributable)..."
+    cp "$WAD_FILE" "${PACKAGE_DIR}/doom1.wad"
+fi
 
 # Copy payload.sh if it exists
 if [ -f "${SCRIPT_DIR}/payload.sh" ]; then
@@ -125,7 +137,7 @@ PAYLOAD_EOF
     chmod +x "${PACKAGE_DIR}/payload.sh"
 fi
 
-# WAD files are not included - users must provide their own
+# doom1.wad shareware is included if available
 
 # Create README for the package
 echo "  Creating README..."
@@ -142,10 +154,10 @@ cat > "${PACKAGE_DIR}/README.md" << 'EOF'
    # If needed, rename the directory to 'doom-pager'
    ```
 
-2. **Provide a WAD file** (this package does not include WAD files):
-   - Place your WAD file (doom1.wad, doom.wad, doom2.wad, etc.) in `/root/games/doom/`
+2. **WAD file**: This package includes doom1.wad (shareware, freely distributable).
+   - The shareware version includes Episode 1: "Knee-Deep in the Dead"
+   - For full game, provide your own doom.wad or doom2.wad
    - Or use Freedoom (free alternative): https://freedoom.github.io/
-   - See INSTALL.md for more information
 
 3. Run Doom from the Payloads menu:
    - Navigate to: Payloads > User > Games > Doom
@@ -255,7 +267,7 @@ echo "  5. Rename the extracted directory to 'doom-pager' (if needed)"
 echo "  6. Provide a WAD file in the doom-pager directory (see INSTALL.md for options)"
 echo "  7. Doom will appear in the Payloads menu under Games > Doom"
 echo ""
-echo "IMPORTANT: This package does NOT include WAD files."
-echo "Users must provide their own WAD files (Freedoom recommended)."
+echo "This package includes doom1.wad (shareware - freely distributable)."
+echo "The shareware version includes Episode 1: Knee-Deep in the Dead."
 echo ""
 
