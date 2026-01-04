@@ -1,0 +1,13 @@
+# OpenWrt SDK (large, download separately)
+openwrt-sdk-*/
+
+# Build artifacts
+*.tar.gz
+package/
+
+# Test files
+test_*
+
+# doomgeneric is a submodule/separate repo
+doomgeneric/
+
