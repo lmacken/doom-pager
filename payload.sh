@@ -35,11 +35,11 @@ if [ -z "$WAD_FILE" ]; then
     exit 1
 fi
 
-LOG green "Starting DOOM..."
+#LOG green "Starting DOOM..."
 LOG "Using WAD file: $WAD_FILE"
 LOG ""
 LOG "Controls:"
-LOG "  D-pad = Move and turn"
+LOG "  D-pad = Move and turn"e
 LOG "  Red Button = Fire weapon"
 LOG "  Green Button = Select/Confirm (menus)"
 LOG "  Green + Up = Open doors/switches"
