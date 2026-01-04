@@ -5,7 +5,7 @@
 # Version: 1.0
 # Category: Games
 
-PAYLOAD_DIR="/root/payloads/user/games/doom-pager"
+PAYLOAD_DIR="/root/payloads/user/games/doom"
 cd "$PAYLOAD_DIR" || { LOG red "ERROR: $PAYLOAD_DIR not found"; exit 1; }
 
 [ ! -f "./doomgeneric" ] && { LOG red "ERROR: doomgeneric not found"; exit 1; }

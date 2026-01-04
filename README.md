@@ -9,7 +9,7 @@ Play the classic 1993 FPS on your WiFi Pineapple Pager!
 Copy the pre-built files from `payloads/` to your Pager:
 
 ```bash
-scp -r payloads/user/games/doom-pager root@172.16.52.1:/root/payloads/user/games/
+scp -r payloads/user/games/doom root@172.16.52.1:/root/payloads/user/games/
 ```
 
 Then find DOOM in: **Payloads → User → Games → DOOM**
@@ -73,7 +73,7 @@ sha256sum -c SHA256SUMS
 ├── payload.sh         # Launcher script
 ├── doom1.wad          # Shareware WAD (Episode 1)
 └── payloads/          # Ready for Hak5 payloads repo PR
-    └── user/games/doom-pager/
+    └── user/games/doom/
 ```
 
 ## License
