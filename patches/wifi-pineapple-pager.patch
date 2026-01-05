@@ -1,9 +1,9 @@
 diff --git a/doomgeneric/Makefile.mipsel b/doomgeneric/Makefile.mipsel
 new file mode 100644
-index 0000000..79ad9c6
+index 0000000..7586b48
 --- /dev/null
 +++ b/doomgeneric/Makefile.mipsel
-@@ -0,0 +1,67 @@
+@@ -0,0 +1,68 @@
 +################################################################
 +#
 +# Cross-compilation Makefile for MIPS (mipsel-linux-gnu)
@@ -25,15 +25,16 @@ index 0000000..79ad9c6
 +# Widen FOV to compensate for aspect ratio stretch (480/320)/(222/200) = 1.35x
 +# Original FOV is 2048, adjusted: 2048 * 1.35 = 2765
 +CFLAGS+=-DFIELDOFVIEW=2765
-+# Optimize for size to reduce memory pressure
-+# -Os: Optimize for size (smaller code = less cache/memory use)
-+# -march=24kec: Target MIPS 24KEc CPU
++# Optimize for speed
++# -O3: Maximum speed optimization
++# -march=24kec: Target MIPS 24KEc CPU with DSP extensions
++# -mdsp: Enable MIPS DSP ASE instructions
++# -funroll-loops: Unroll loops for speed
++# -ffast-math: Faster floating point
 +# -fomit-frame-pointer: Free up a register
-+# -ffunction-sections -fdata-sections: Allow linker to remove unused code
-+CFLAGS+=-Os -Wall -DNORMALUNIX -DLINUX -D_DEFAULT_SOURCE
-+CFLAGS+=-march=24kec -mtune=24kec -ffast-math -fomit-frame-pointer
-+CFLAGS+=-ffunction-sections -fdata-sections
-+LDFLAGS+=-Wl,--gc-sections
++CFLAGS+=-O3 -Wall -DNORMALUNIX -DLINUX -D_DEFAULT_SOURCE
++CFLAGS+=-march=24kec -mtune=24kec -mdsp
++CFLAGS+=-ffast-math -funroll-loops -fomit-frame-pointer
 +LDFLAGS+=-static
 +LIBS+=-lm -lc
 +
