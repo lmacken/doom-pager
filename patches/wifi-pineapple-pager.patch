@@ -73,7 +73,7 @@ index 0000000..7586b48
 +	@echo OBJS: $(OBJS)
 +
 diff --git a/doomgeneric/doomgeneric_linuxvt.c b/doomgeneric/doomgeneric_linuxvt.c
-index ed94dd9..cdc5f6a 100644
+index ed94dd9..f3e25d9 100644
 --- a/doomgeneric/doomgeneric_linuxvt.c
 +++ b/doomgeneric/doomgeneric_linuxvt.c
 @@ -6,6 +6,8 @@
@@ -410,7 +410,7 @@ index ed94dd9..cdc5f6a 100644
  
  	//
  	// set up input
-@@ -460,16 +689,62 @@ void DG_Init() {
+@@ -460,16 +689,91 @@ void DG_Init() {
  	gettimeofday(&startTime, NULL);
  }
  
@@ -421,6 +421,9 @@ index ed94dd9..cdc5f6a 100644
 +	uint8_t b = pixel & 0xFF;
 +	return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
 +}
++
++// Inline RGB8888 to RGB565 conversion
++#define RGB888_TO_RGB565(p) (((p >> 8) & 0xF800) | ((p >> 5) & 0x07E0) | ((p >> 3) & 0x001F))
 +
  void DG_DrawFrame() {
 -	// we need to do it line-by-line like this to account for the
@@ -444,22 +447,48 @@ index ed94dd9..cdc5f6a 100644
 +			// Render with correct aspect ratio (centered with vertical black bars)
 +			for (unsigned int y = 0; y < aspectOutH; y++) {
 +				uint16_t *dst = renderBuffer + (y + aspectOffY) * fbWidth;
-+				unsigned int srcX = srcXLookupAspect[y];
++				uint32_t *srcRow = srcBuf + srcXLookupAspect[y];
 +				
-+				for (unsigned int x = 0; x < aspectOutW; x++) {
-+					uint32_t pixel = srcBuf[srcYLookupAspect[x] * DOOMGENERIC_RESX + srcX];
-+					dst[x] = ((pixel >> 8) & 0xF800) | ((pixel >> 5) & 0x07E0) | ((pixel >> 3) & 0x001F);
++				// Process 4 pixels at a time when possible
++				unsigned int x = 0;
++				for (; x + 3 < aspectOutW; x += 4) {
++					uint32_t p0 = srcRow[srcYLookupAspect[x] * DOOMGENERIC_RESX];
++					uint32_t p1 = srcRow[srcYLookupAspect[x+1] * DOOMGENERIC_RESX];
++					uint32_t p2 = srcRow[srcYLookupAspect[x+2] * DOOMGENERIC_RESX];
++					uint32_t p3 = srcRow[srcYLookupAspect[x+3] * DOOMGENERIC_RESX];
++					dst[x]   = RGB888_TO_RGB565(p0);
++					dst[x+1] = RGB888_TO_RGB565(p1);
++					dst[x+2] = RGB888_TO_RGB565(p2);
++					dst[x+3] = RGB888_TO_RGB565(p3);
++				}
++				// Handle remaining pixels
++				for (; x < aspectOutW; x++) {
++					uint32_t pixel = srcRow[srcYLookupAspect[x] * DOOMGENERIC_RESX];
++					dst[x] = RGB888_TO_RGB565(pixel);
 +				}
 +			}
 +		} else {
 +			// Full-screen stretched rendering (gameplay with FOV correction)
 +			for (unsigned int y = 0; y < scaledOutH; y++) {
 +				uint16_t *dst = renderBuffer + (y + scaledOffY) * fbWidth;
-+				unsigned int srcX = srcXLookup[y];
++				uint32_t *srcRow = srcBuf + srcXLookup[y];
 +				
-+				for (unsigned int x = 0; x < scaledOutW; x++) {
-+					uint32_t pixel = srcBuf[srcYLookup[x] * DOOMGENERIC_RESX + srcX];
-+					dst[x] = ((pixel >> 8) & 0xF800) | ((pixel >> 5) & 0x07E0) | ((pixel >> 3) & 0x001F);
++				// Process 4 pixels at a time when possible
++				unsigned int x = 0;
++				for (; x + 3 < scaledOutW; x += 4) {
++					uint32_t p0 = srcRow[srcYLookup[x] * DOOMGENERIC_RESX];
++					uint32_t p1 = srcRow[srcYLookup[x+1] * DOOMGENERIC_RESX];
++					uint32_t p2 = srcRow[srcYLookup[x+2] * DOOMGENERIC_RESX];
++					uint32_t p3 = srcRow[srcYLookup[x+3] * DOOMGENERIC_RESX];
++					dst[x]   = RGB888_TO_RGB565(p0);
++					dst[x+1] = RGB888_TO_RGB565(p1);
++					dst[x+2] = RGB888_TO_RGB565(p2);
++					dst[x+3] = RGB888_TO_RGB565(p3);
++				}
++				// Handle remaining pixels
++				for (; x < scaledOutW; x++) {
++					uint32_t pixel = srcRow[srcYLookup[x] * DOOMGENERIC_RESX];
++					dst[x] = RGB888_TO_RGB565(pixel);
 +				}
 +			}
 +		}
