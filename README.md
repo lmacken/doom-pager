@@ -66,6 +66,36 @@ sha256sum -c SHA256SUMS
 - **Display**: 222×480 RGB565, rotated 90° CCW
 - **Input**: GPIO buttons via `/dev/input/event0`
 
+## Patch Features
+
+Our `wifi-pineapple-pager.patch` adds:
+
+**Display**
+- 16-bit RGB565 framebuffer support
+- 90° CCW rotation for portrait display
+- Full-screen stretched scaling with widened FOV (gameplay)
+- Aspect-correct rendering with letterboxing (menus/title)
+- Precomputed lookup tables for fast scaling
+
+**Input**
+- GPIO button mapping (red/green buttons)
+- Button combo detection:
+  - Red + Green → ESC (quit/menu)
+  - Green + Up → Use (open doors)
+  - Green + Down → Automap toggle
+  - Green + Left/Right → Strafe
+
+**Performance**
+- MIPS 24KEc optimizations (`-march=24kec -mdsp -mbranch-likely`)
+- 4-pixel loop unrolling in render loop
+- Inline RGB888→RGB565 conversion macro
+- Aggressive compiler flags (`-O3 -ffast-math -funroll-loops`)
+
+**System**
+- Graphics mode switching (prevents console interference)
+- Signal handlers for clean exit
+- Skip quit confirmation dialog
+
 ## Files
 
 ```
