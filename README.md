@@ -4,6 +4,7 @@ Play the classic 1993 FPS on your WiFi Pineapple Pager!
 
 ![DOOM on Pager](doom1.jpg)
 ![DOOM on Pager](doom2.jpg)
+![Darren DOOM Demo](doomdarren.png)
 
 ## Quick Install
 
