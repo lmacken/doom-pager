@@ -119,6 +119,7 @@ Our `wifi-pineapple-pager.patch` adds:
 - easy cheats
 - external keyboard support
 - multiplayer?!
+- DOOM theme ringtone jingle at startup
 
 ## License
 
