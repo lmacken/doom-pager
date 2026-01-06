@@ -11,18 +11,21 @@ cd "$PAYLOAD_DIR" || {
   exit 1
 }
 
+# Verify required files exist
 [ ! -f "./doomgeneric" ] && {
   LOG red "ERROR: doomgeneric not found"
   exit 1
 }
-chmod +x ./doomgeneric 2>/dev/null
+chmod +x ./doomgeneric
 
+# Find any WAD file (doom1.wad, freedoom1.wad, etc.)
 WAD_FILE=$(ls "$PAYLOAD_DIR"/*.wad 2>/dev/null | head -1)
 [ -z "$WAD_FILE" ] && {
   LOG red "ERROR: No .wad file found"
   exit 1
 }
 
+# Display controls help
 LOG "DOOM - $WAD_FILE"
 LOG ""
 LOG "D-pad=Move  Red=Fire  Green=Select"
@@ -33,15 +36,14 @@ LOG ""
 LOG "Press any button..."
 WAIT_FOR_INPUT >/dev/null 2>&1
 
+# Stop the Pager UI to get exclusive access to the framebuffer and input devices
 /etc/init.d/pineapplepager stop 2>/dev/null
 /etc/init.d/pineapd stop 2>/dev/null
-sleep 0.2
-killall -9 pineapple 2>/dev/null
-sleep 0.2
 
-dd if=/dev/zero of=/dev/fb0 bs=213120 count=1 2>/dev/null
+# Run DOOM!
 "$PAYLOAD_DIR/doomgeneric" -iwad "$WAD_FILE" 2>/dev/null
 
+# Restore the Pager UI after DOOM exits
 /etc/init.d/pineapplepager start 2>/dev/null &
 /etc/init.d/pineapd start 2>/dev/null &
 

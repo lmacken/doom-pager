@@ -6,6 +6,11 @@ Play the classic 1993 FPS on your WiFi Pineapple Pager!
 ![DOOM on Pager](doom2.jpg)
 ![Darren DOOM Demo](doomdarren.png)
 
+
+## Install using `Pull Payload PR`
+
+If you have the `general` -> `Pull Payload PR` payload on your pager, you can simply type in PR `130` and the game will be installed!
+
 ## Quick Install
 
 Copy the pre-built files from `payloads/` to your Pager:
