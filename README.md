@@ -113,6 +113,12 @@ Our `wifi-pineapple-pager.patch` adds:
     └── user/games/doom/
 ```
 
+## Patch Ideas
+
+- further rendering optimizations
+- easy cheats
+- external keyboard support
+
 ## License
 
 - DOOM source: GPL
