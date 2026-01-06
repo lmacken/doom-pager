@@ -118,6 +118,7 @@ Our `wifi-pineapple-pager.patch` adds:
 - further rendering optimizations
 - easy cheats
 - external keyboard support
+- multiplayer?!
 
 ## License
 
