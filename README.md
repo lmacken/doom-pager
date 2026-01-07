@@ -102,12 +102,6 @@ Our `wifi-pineapple-pager.patch` adds:
 - Signal handlers for clean exit
 - Skip quit confirmation dialog
 
-**Multiplayer**
-- Chocolate Doom 3.1.x network protocol implementation
-- POSIX socket-based network layer (no SDL dependency)
-- Full game state synchronization with consistency checks
-- Ticcmd diff compression for efficient bandwidth usage
-
 ## Files
 
 ```
@@ -139,14 +133,15 @@ chocolate-doom -iwad doom1.wad -connect 64.227.99.100:2342
 ```
 
 ### Network Features
-- Full Chocolate Doom 3.1.x protocol compatibility
-- Works with any Chocolate Doom server
-- Automatic keepalive to prevent lobby timeout
-- Proper game state synchronization
+- Chocolate Doom 3.1.x protocol compatibility
+- Works with vanilla Chocolate Doom server
+- POSIX socket-based network layer (no SDL dependency)
+- Full game state synchronization with consistency checks
+- Ticcmd diff compression for efficient bandwidth usage
 
-## Patch Ideas
+## More Patch Ideas
 
-- further rendering optimizations
+- further rendering optimizations (especially the intro demo)
 - easy cheats
 - external keyboard support
 - DOOM theme ringtone jingle at startup
