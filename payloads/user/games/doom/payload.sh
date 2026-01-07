@@ -2,10 +2,11 @@
 # Title: DOOM
 # Description: The classic 1993 FPS on your WiFi Pineapple Pager!
 # Author: @lmacken
-# Version: 1.0
+# Version: 2.0
 # Category: Games
 
 PAYLOAD_DIR="/root/payloads/user/games/doom"
+
 cd "$PAYLOAD_DIR" || {
   LOG red "ERROR: $PAYLOAD_DIR not found"
   exit 1
@@ -26,22 +27,28 @@ WAD_FILE=$(ls "$PAYLOAD_DIR"/*.wad 2>/dev/null | head -1)
 }
 
 # Display controls help
-LOG "DOOM - $WAD_FILE"
+LOG "DOOM - Single Player"
 LOG ""
 LOG "D-pad=Move  Red=Fire  Green=Select"
 LOG "Green+Up=Use  Green+Down=Map"
 LOG "Green+Left/Right=Strafe"
 LOG "Red+Green=Quit"
 LOG ""
-LOG "Press any button..."
+LOG "Press any button to start..."
 WAIT_FOR_INPUT >/dev/null 2>&1
 
 # Stop the Pager UI to get exclusive access to the framebuffer and input devices
 /etc/init.d/pineapplepager stop 2>/dev/null
 /etc/init.d/pineapd stop 2>/dev/null
 
-# Run DOOM!
-"$PAYLOAD_DIR/doomgeneric" -iwad "$WAD_FILE" 2>/dev/null
+# Clear the framebuffer to black
+dd if=/dev/zero of=/dev/fb0 bs=61440 count=1 2>/dev/null
+
+# Small delay to let services fully stop
+sleep 1
+
+# Run DOOM in single-player mode
+"$PAYLOAD_DIR/doomgeneric" -iwad "$WAD_FILE" >/tmp/doom.log 2>&1
 
 # Restore the Pager UI after DOOM exits
 /etc/init.d/pineapplepager start 2>/dev/null &

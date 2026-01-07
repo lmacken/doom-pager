@@ -102,23 +102,51 @@ Our `wifi-pineapple-pager.patch` adds:
 - Signal handlers for clean exit
 - Skip quit confirmation dialog
 
+**Multiplayer**
+- Chocolate Doom 3.1.x network protocol implementation
+- POSIX socket-based network layer (no SDL dependency)
+- Full game state synchronization with consistency checks
+- Ticcmd diff compression for efficient bandwidth usage
+
 ## Files
 
 ```
-├── build.sh           # Build script
-├── patches/           # Patches for doomgeneric
-├── payload.sh         # Launcher script
-├── doom1.wad          # Shareware WAD (Episode 1)
-└── payloads/          # Ready for Hak5 payloads repo PR
+├── build.sh                 # Build script
+├── patches/                 # Patches for doomgeneric
+├── payload.sh               # Single-player launcher
+├── payload-deathmatch.sh    # Multiplayer deathmatch launcher
+├── doom1.wad                # Shareware WAD (Episode 1)
+├── ansible/                 # Server setup playbook
+└── payloads/                # Ready for Hak5 payloads repo PR
     └── user/games/doom/
 ```
+
+## Multiplayer Deathmatch
+
+Connect to our public DOOM server for multiplayer deathmatch with other Pager and desktop players!
+
+Use `payload-deathmatch.sh` or run manually:
+
+```bash
+./doomgeneric -iwad doom1.wad -connect 64.227.99.100:2342
+```
+
+Desktop players can join with Chocolate Doom:
+```bash
+chocolate-doom -iwad doom1.wad -connect 64.227.99.100:2342
+```
+
+### Network Features
+- Full Chocolate Doom 3.1.x protocol compatibility
+- Works with any Chocolate Doom server
+- Automatic keepalive to prevent lobby timeout
+- Proper game state synchronization
 
 ## Patch Ideas
 
 - further rendering optimizations
 - easy cheats
 - external keyboard support
-- multiplayer?!
 - DOOM theme ringtone jingle at startup
 
 ## License

@@ -1,0 +1,2210 @@
+diff --git a/doomgeneric/d_loop.c b/doomgeneric/d_loop.c
+index 1939dbd..91e27a6 100644
+--- a/doomgeneric/d_loop.c
++++ b/doomgeneric/d_loop.c
+@@ -37,9 +37,13 @@
+ #include "net_io.h"
+ #include "net_query.h"
+ #include "net_server.h"
+-#include "net_sdl.h"
++#include "net_socket.h"  // Use POSIX sockets instead of SDL_net
+ #include "net_loop.h"
+ 
++// External declarations for network settings received from server
++extern net_gamesettings_t received_settings;
++extern boolean received_settings_valid;
++
+ // The complete set of data for a particular tic.
+ 
+ typedef struct
+@@ -437,15 +441,56 @@ void D_StartNetGame(net_gamesettings_t *settings,
+     //    printf("Syncing netgames like Vanilla Doom.\n");
+     //}
+ #else
+-    settings->consoleplayer = 0;
+-	settings->num_players = 1;
+-	settings->player_classes[0] = player_class;
+-	settings->new_sync = 0;
+-	settings->extratics = 1;
+-	settings->ticdup = 1;
+-
+-	ticdup = settings->ticdup;
+-	new_sync = settings->new_sync;
++#ifdef FEATURE_MULTIPLAYER
++    // If we're connected to a network game, use the received settings
++    if (net_client_connected && received_settings_valid)
++    {
++        // Copy all settings from what the server sent us
++        settings->consoleplayer = received_settings.consoleplayer;
++        settings->num_players = received_settings.num_players;
++        settings->deathmatch = received_settings.deathmatch;
++        settings->episode = received_settings.episode;
++        settings->map = received_settings.map;
++        settings->skill = received_settings.skill;
++        settings->nomonsters = received_settings.nomonsters;
++        settings->fast_monsters = received_settings.fast_monsters;
++        settings->respawn_monsters = received_settings.respawn_monsters;
++        settings->timelimit = received_settings.timelimit;
++        settings->loadgame = received_settings.loadgame;
++        settings->lowres_turn = received_settings.lowres_turn;
++        settings->new_sync = received_settings.new_sync;
++        settings->extratics = received_settings.extratics;
++        settings->ticdup = received_settings.ticdup;
++        
++        for (int i = 0; i < NET_MAXPLAYERS; i++)
++            settings->player_classes[i] = received_settings.player_classes[i];
++        
++        printf("D_StartNetGame: Using network settings - player %d of %d\n",
++               settings->consoleplayer + 1, settings->num_players);
++        
++        // CRITICAL: Set localplayer so we control our own character!
++        localplayer = settings->consoleplayer;
++        
++        // Set playeringame for all players
++        for (int i = 0; i < NET_MAXPLAYERS; i++)
++            local_playeringame[i] = i < settings->num_players;
++    }
++    else
++#endif
++    {
++        // Single player defaults
++        settings->consoleplayer = 0;
++        settings->num_players = 1;
++        settings->player_classes[0] = player_class;
++        settings->new_sync = 0;
++        settings->extratics = 1;
++        settings->ticdup = 1;
++        localplayer = 0;
++        local_playeringame[0] = true;
++    }
++
++    ticdup = settings->ticdup;
++    new_sync = settings->new_sync;
+ #endif
+ }
+ 
+@@ -476,7 +521,7 @@ boolean D_InitNetGame(net_connect_data_t *connect_data)
+     {
+         NET_SV_Init();
+         NET_SV_AddModule(&net_loop_server_module);
+-        NET_SV_AddModule(&net_sdl_module);
++        NET_SV_AddModule(&net_socket_module);
+         NET_SV_RegisterWithMaster();
+ 
+         net_loop_client_module.InitClient();
+@@ -515,8 +560,8 @@ boolean D_InitNetGame(net_connect_data_t *connect_data)
+ 
+         if (i > 0)
+         {
+-            net_sdl_module.InitClient();
+-            addr = net_sdl_module.ResolveAddress(myargv[i+1]);
++            net_socket_module.InitClient();
++            addr = net_socket_module.ResolveAddress(myargv[i+1]);
+ 
+             if (addr == NULL)
+             {
+diff --git a/doomgeneric/d_loop.h b/doomgeneric/d_loop.h
+index eb87d84..0506538 100644
+--- a/doomgeneric/d_loop.h
++++ b/doomgeneric/d_loop.h
+@@ -77,5 +77,14 @@ void D_StartNetGame(net_gamesettings_t *settings,
+ extern boolean singletics;
+ extern int gametic, ticdup;
+ 
++// Receive ticcmds from network
++void D_ReceiveTic(ticcmd_t *ticcmds, boolean *players_mask);
++
++// Wait for game launch signal
++void NET_WaitForLaunch(void);
++
++// LAN server discovery
++net_addr_t *NET_FindLANServer(void);
++
+ #endif
+ 
+diff --git a/doomgeneric/doomfeatures.h b/doomgeneric/doomfeatures.h
+index dff6936..724210e 100644
+--- a/doomgeneric/doomfeatures.h
++++ b/doomgeneric/doomfeatures.h
+@@ -29,7 +29,7 @@
+ 
+ // Enables multiplayer support (network games)
+ 
+-#undef FEATURE_MULTIPLAYER
++#define FEATURE_MULTIPLAYER
+ 
+ // Enables sound output
+ 
+diff --git a/doomgeneric/dummy.c b/doomgeneric/dummy.c
+index d78816b..0efdd9b 100644
+--- a/doomgeneric/dummy.c
++++ b/doomgeneric/dummy.c
+@@ -11,6 +11,7 @@
+  *---------------------------------------------------------------------*/
+ 
+ #include "doomtype.h"
++#include "doomfeatures.h"
+ 
+ /*---------------------------------------------------------------------*
+  *  local definitions                                                  *
+@@ -24,9 +25,11 @@
+  *  public data                                                        *
+  *---------------------------------------------------------------------*/
+ 
++// net_client_connected and drone now defined in net_client.c when FEATURE_MULTIPLAYER is enabled
++#ifndef FEATURE_MULTIPLAYER
+ boolean net_client_connected = false;
+-
+ boolean drone = false;
++#endif
+ 
+ /*---------------------------------------------------------------------*
+  *  private data                                                       *
+diff --git a/doomgeneric/g_game.c b/doomgeneric/g_game.c
+index 9954d78..20eca54 100644
+--- a/doomgeneric/g_game.c
++++ b/doomgeneric/g_game.c
+@@ -948,8 +948,8 @@ void G_Ticker (void)
+ 		if (gametic > BACKUPTICS 
+ 		    && consistancy[i][buf] != cmd->consistancy) 
+ 		{ 
+-		    I_Error ("consistency failure (%i should be %i)",
+-			     cmd->consistancy, consistancy[i][buf]); 
++		    I_Error ("consistency failure for player %i (%i should be %i)",
++			     i, cmd->consistancy, consistancy[i][buf]); 
+ 		} 
+ 		if (players[i].mo) 
+ 		    consistancy[i][buf] = players[i].mo->x; 
+diff --git a/doomgeneric/net_defs.h b/doomgeneric/net_defs.h
+index bedfb95..f1ab16e 100644
+--- a/doomgeneric/net_defs.h
++++ b/doomgeneric/net_defs.h
+@@ -100,7 +100,9 @@ struct _net_addr_s
+ 
+ // magic number sent when connecting to check this is a valid client
+ 
+-#define NET_MAGIC_NUMBER 3436803284U
++// Magic number changed in Chocolate Doom 3.1.0
++#define NET_MAGIC_NUMBER     1454104972U
++#define NET_OLD_MAGIC_NUMBER 3436803284U
+ 
+ // header field value indicating that the packet is a reliable packet
+ 
+diff --git a/doomgeneric/net_query.h b/doomgeneric/net_query.h
+index 563a055..c7e71d5 100644
+--- a/doomgeneric/net_query.h
++++ b/doomgeneric/net_query.h
+@@ -1,44 +1,15 @@
+ //
+ // Copyright(C) 2005-2014 Simon Howard
++// Copyright(C) 2026 WiFi Pineapple Pager port
+ //
+-// This program is free software; you can redistribute it and/or
+-// modify it under the terms of the GNU General Public License
+-// as published by the Free Software Foundation; either version 2
+-// of the License, or (at your option) any later version.
+-//
+-// This program is distributed in the hope that it will be useful,
+-// but WITHOUT ANY WARRANTY; without even the implied warranty of
+-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+-// GNU General Public License for more details.
+-//
+-// DESCRIPTION:
+-//     Querying servers to find their current status.
++// Server query functions
+ //
+ 
+ #ifndef NET_QUERY_H
+ #define NET_QUERY_H
+ 
+-#include "net_defs.h"
+-
+-typedef void (*net_query_callback_t)(net_addr_t *addr,
+-                                     net_querydata_t *querydata,
+-                                     unsigned int ping_time,
+-                                     void *user_data);
+-
+-extern int NET_StartLANQuery(void);
+-extern int NET_StartMasterQuery(void);
+-
+-extern void NET_LANQuery(void);
+-extern void NET_MasterQuery(void);
+-extern void NET_QueryAddress(char *addr);
+-extern net_addr_t *NET_FindLANServer(void);
+-
+-extern int NET_Query_Poll(net_query_callback_t callback, void *user_data);
+-
+-extern net_addr_t *NET_Query_ResolveMaster(net_context_t *context);
+-extern void NET_Query_AddToMaster(net_addr_t *master_addr);
+-extern boolean NET_Query_CheckAddedToMaster(boolean *result);
+-extern void NET_Query_MasterResponse(net_packet_t *packet);
++void NET_QueryAddress(char *addr);
++void NET_LANQuery(void);
++void NET_MasterQuery(void);
+ 
+ #endif /* #ifndef NET_QUERY_H */
+-
+diff --git a/doomgeneric/net_client.c b/doomgeneric/net_client.c
+new file mode 100644
+--- /dev/null
++++ b/doomgeneric/net_client.c
+@@ -0,0 +1,977 @@
++//
++// Copyright(C) 2005-2014 Simon Howard
++// Copyright(C) 2026 WiFi Pineapple Pager port
++//
++// Network client code
++//
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "config.h"
++#include "doomtype.h"
++#include "d_loop.h"
++#include "d_ticcmd.h"
++#include "i_system.h"
++#include "i_timer.h"
++#include "m_argv.h"
++#include "m_misc.h"
++#include "net_client.h"
++#include "net_defs.h"
++#include "net_io.h"
++#include "net_packet.h"
++#include "net_socket.h"
++#include "w_wad.h"
++
++// Connection state
++typedef enum
++{
++    CLIENT_STATE_DISCONNECTED,
++    CLIENT_STATE_CONNECTING,
++    CLIENT_STATE_CONNECTED,
++    CLIENT_STATE_WAITING_START,
++    CLIENT_STATE_IN_GAME,
++} client_state_t;
++
++static client_state_t client_state = CLIENT_STATE_DISCONNECTED;
++static net_addr_t *server_addr = NULL;
++static net_context_t *client_context = NULL;
++
++// Global variables exported to other modules
++boolean net_client_connected = false;
++boolean net_client_received_wait_data = false;
++net_waitdata_t net_client_wait_data;
++boolean net_waiting_for_launch = false;
++char *net_player_name = "Pager";
++
++sha1_digest_t net_server_wad_sha1sum;
++sha1_digest_t net_server_deh_sha1sum;
++unsigned int net_server_is_freedoom = 0;
++sha1_digest_t net_local_wad_sha1sum;
++sha1_digest_t net_local_deh_sha1sum;
++unsigned int net_local_is_freedoom = 0;
++
++boolean drone = false;
++
++// Game settings received from server
++// Received game settings from server (non-static for d_loop.c access)
++net_gamesettings_t received_settings;
++boolean received_settings_valid = false;
++
++// Send queue - stores ticcmd diffs for retransmission
++typedef struct
++{
++    boolean active;
++    unsigned int seq;
++    unsigned int time;  // Time command was generated
++    unsigned int diff;  // Diff bitfield
++    ticcmd_t cmd;       // The full ticcmd
++} net_send_queue_t;
++
++#define BACKUPTICS 128
++static net_send_queue_t send_queue[BACKUPTICS];
++static ticcmd_t last_ticcmd;  // For calculating diffs
++
++// Receive window - baseline ticcmds for patching diffs (per-player)
++static ticcmd_t recvwindow_cmd_base[NET_MAXPLAYERS];
++
++// Last time we sent a packet
++static unsigned int last_send_time = 0;
++static unsigned int last_gamedata_time = 0;
++static unsigned int last_packet_send_time = 0;  // For keepalive
++
++// Connection sequence number
++static unsigned int connect_seq = 0;
++
++// Local player number
++static int local_player = 0;
++
++// Receive window - tracks which tic we're expecting
++static unsigned int recvwindow_start = 0;
++
++// Track the next expected reliable sequence number
++static unsigned int reliable_recv_seq = 0;
++
++// Expand a low byte tic number to a full tic number relative to recvwindow_start
++static unsigned int NET_CL_ExpandTicNum(unsigned int b)
++{
++    unsigned int l, h;
++    unsigned int result;
++
++    h = recvwindow_start & ~0xff;
++    l = recvwindow_start & 0xff;
++
++    result = h | b;
++
++    if (l < 0x40 && b > 0xb0)
++        result -= 0x100;
++    if (l > 0xb0 && b < 0x40)
++        result += 0x100;
++    
++    return result;
++}
++
++static void NET_CL_SendSyn(net_connect_data_t *data);
++static void NET_CL_ParsePacket(net_packet_t *packet);
++static void NET_CL_SendReliableACK(unsigned int seq);
++static void NET_CL_SendGameDataACK(void);
++static void NET_CL_SendTics(int starttic, int endtic);
++
++// Track last reliable sequence we ACKed to avoid duplicate ACKs
++static unsigned int last_acked_seq = 0xFF;
++
++void NET_CL_Init(void)
++{
++    client_context = NET_NewContext();
++    NET_AddModule(client_context, &net_socket_module);
++}
++
++boolean NET_CL_Connect(net_addr_t *addr, net_connect_data_t *data)
++{
++    int start_time;
++    int attempts;
++
++    if (client_state != CLIENT_STATE_DISCONNECTED)
++    {
++        fprintf(stderr, "NET_CL_Connect: Already connected\n");
++        return false;
++    }
++
++    // Initialize socket module
++    if (!net_socket_module.InitClient())
++    {
++        fprintf(stderr, "NET_CL_Connect: Failed to init socket\n");
++        return false;
++    }
++
++    server_addr = addr;
++    client_state = CLIENT_STATE_CONNECTING;
++    connect_seq = 0;
++    last_packet_send_time = I_GetTimeMS();  // Initialize keepalive timer
++
++    printf("NET_CL_Connect: Connecting to %s...\n", NET_AddrToString(addr));
++
++    // Try to connect with timeout
++    start_time = I_GetTimeMS();
++    attempts = 0;
++
++    while (client_state == CLIENT_STATE_CONNECTING)
++    {
++        // Send SYN packet
++        if (I_GetTimeMS() - last_send_time > 500)
++        {
++            NET_CL_SendSyn(data);
++            last_send_time = I_GetTimeMS();
++            attempts++;
++            printf("NET_CL_Connect: Attempt %d...\n", attempts);
++        }
++
++        // Check for response
++        NET_CL_Run();
++
++        // Timeout after 10 seconds
++        if (I_GetTimeMS() - start_time > 10000)
++        {
++            fprintf(stderr, "NET_CL_Connect: Connection timed out\n");
++            client_state = CLIENT_STATE_DISCONNECTED;
++            return false;
++        }
++
++        I_Sleep(10);
++    }
++
++    if (client_state == CLIENT_STATE_CONNECTED ||
++        client_state == CLIENT_STATE_WAITING_START)
++    {
++        printf("NET_CL_Connect: Connected!\n");
++        net_client_connected = true;
++        return true;
++    }
++
++    return false;
++}
++
++static void NET_CL_SendSyn(net_connect_data_t *data)
++{
++    net_packet_t *packet;
++
++    packet = NET_NewPacket(256);
++    if (packet == NULL)
++        return;
++
++    // Packet type
++    NET_WriteInt16(packet, NET_PACKET_TYPE_SYN);
++    
++    // Magic number
++    NET_WriteInt32(packet, NET_MAGIC_NUMBER);
++    
++    // Version string (must match format server expects)
++    NET_WriteString(packet, "Chocolate Doom 3.1.1");
++    
++    // Protocol list: count followed by protocol name strings
++    NET_WriteInt8(packet, 1);  // We support 1 protocol
++    NET_WriteString(packet, "CHOCOLATE_DOOM_0");
++    
++    // Connect data
++    NET_WriteInt8(packet, data->gamemode);
++    NET_WriteInt8(packet, data->gamemission);
++    NET_WriteInt8(packet, data->lowres_turn);
++    NET_WriteInt8(packet, data->drone);
++    NET_WriteInt8(packet, data->max_players);
++    NET_WriteInt8(packet, data->is_freedoom);
++
++    // WAD SHA1
++    for (int i = 0; i < 20; i++)
++        NET_WriteInt8(packet, data->wad_sha1sum[i]);
++
++    // DEH SHA1
++    for (int i = 0; i < 20; i++)
++        NET_WriteInt8(packet, data->deh_sha1sum[i]);
++
++    NET_WriteInt8(packet, data->player_class);
++    
++    // Player name
++    NET_WriteString(packet, net_player_name);
++
++    NET_SendPacket(server_addr, packet);
++    NET_FreePacket(packet);
++}
++
++static void NET_CL_SendReliableACK(unsigned int seq)
++{
++    net_packet_t *packet;
++    
++    // Check if this is the sequence we expected
++    if (seq == (reliable_recv_seq & 0xff))
++    {
++        // Accept this packet and increment our expected sequence
++        reliable_recv_seq = (reliable_recv_seq + 1) & 0xff;
++    }
++    // If not the expected sequence, still ACK but don't increment
++    // (this handles retries and out-of-order packets)
++    
++    packet = NET_NewPacket(16);
++    if (packet == NULL)
++        return;
++    
++    // ACK contains the NEXT expected sequence number
++    NET_WriteInt16(packet, NET_PACKET_TYPE_RELIABLE_ACK);
++    NET_WriteInt8(packet, reliable_recv_seq & 0xFF);
++    
++    NET_SendPacket(server_addr, packet);
++    NET_FreePacket(packet);
++}
++
++// Send acknowledgment for received game data
++static void NET_CL_SendGameDataACK(void)
++{
++    net_packet_t *packet;
++    
++    packet = NET_NewPacket(10);
++    if (packet == NULL)
++        return;
++    
++    NET_WriteInt16(packet, NET_PACKET_TYPE_GAMEDATA_ACK);
++    NET_WriteInt8(packet, recvwindow_start & 0xFF);
++    
++    NET_SendPacket(server_addr, packet);
++    NET_FreePacket(packet);
++}
++
++void NET_CL_Disconnect(void)
++{
++    net_packet_t *packet;
++
++    if (!net_client_connected)
++        return;
++
++    // Send disconnect packet
++    packet = NET_NewPacket(16);
++    if (packet != NULL)
++    {
++        NET_WriteInt16(packet, NET_PACKET_TYPE_DISCONNECT);
++        NET_SendPacket(server_addr, packet);
++        NET_FreePacket(packet);
++    }
++
++    NET_Socket_Shutdown();
++    client_state = CLIENT_STATE_DISCONNECTED;
++    net_client_connected = false;
++}
++
++void NET_CL_Run(void)
++{
++    net_addr_t *addr;
++    net_packet_t *packet;
++    unsigned int nowtime;
++
++    if (client_context == NULL)
++        return;
++
++    // Receive and process packets
++    while (NET_RecvPacket(client_context, &addr, &packet))
++    {
++        NET_CL_ParsePacket(packet);
++        NET_FreePacket(packet);
++        NET_FreeAddress(addr);
++    }
++    
++    // Send keepalive if we haven't sent anything recently (every 1 second)
++    // Server disconnects clients after 30 seconds of silence!
++    nowtime = I_GetTimeMS();
++    if (net_client_connected && (nowtime - last_packet_send_time > 1000))
++    {
++        packet = NET_NewPacket(16);
++        if (packet != NULL)
++        {
++            NET_WriteInt16(packet, NET_PACKET_TYPE_KEEPALIVE);
++            NET_SendPacket(server_addr, packet);
++            NET_FreePacket(packet);
++            last_packet_send_time = nowtime;
++        }
++    }
++}
++
++static void NET_CL_ParsePacket(net_packet_t *packet)
++{
++    unsigned int packet_type;
++    unsigned int is_reliable;
++    unsigned int reliable_seq = 0;
++
++    if (!NET_ReadInt16(packet, &packet_type))
++        return;
++
++    // Check for reliable packet flag (bit 15)
++    is_reliable = packet_type & NET_RELIABLE_PACKET;
++    packet_type = packet_type & ~NET_RELIABLE_PACKET;
++    
++    // Read reliable sequence number and send ACK
++    if (is_reliable)
++    {
++        if (!NET_ReadInt8(packet, &reliable_seq))
++            return;
++        NET_CL_SendReliableACK(reliable_seq);
++    }
++    
++    // Debug output - only for non-GAMEDATA packets to reduce spam
++    if (packet_type != NET_PACKET_TYPE_GAMEDATA && packet_type != NET_PACKET_TYPE_GAMEDATA_RESEND)
++    {
++        fprintf(stderr, "NET_CL_ParsePacket: type=%d reliable=%d seq=%d\n", 
++                packet_type, is_reliable ? 1 : 0, reliable_seq);
++    }
++
++    switch (packet_type)
++    {
++        case NET_PACKET_TYPE_SYN:
++        {
++            // Server's SYN response - connection accepted!
++            // Read server version string
++            char *server_version = NET_ReadString(packet);
++            if (server_version != NULL)
++            {
++                fprintf(stderr, "NET_CL_ParsePacket: Server version: %s\n", server_version);
++            }
++            
++            // Read server's protocol
++            char *protocol = NET_ReadString(packet);
++            if (protocol != NULL)
++            {
++                fprintf(stderr, "NET_CL_ParsePacket: Protocol: %s\n", protocol);
++            }
++            
++            // Connection successful!
++            printf("NET_CL_ParsePacket: Connected to server!\n");
++            client_state = CLIENT_STATE_WAITING_START;
++            break;
++        }
++        
++        case NET_PACKET_TYPE_ACK:
++        {
++            // Legacy: Connection accepted (deprecated but handle anyway)
++            unsigned int player;
++            if (NET_ReadInt8(packet, &player))
++            {
++                local_player = player;
++                printf("NET_CL_ParsePacket: Accepted as player %d\n", local_player);
++                client_state = CLIENT_STATE_WAITING_START;
++            }
++            break;
++        }
++
++        case NET_PACKET_TYPE_REJECTED:
++        {
++            char *reason = NET_ReadString(packet);
++            if (reason != NULL)
++                fprintf(stderr, "Connection rejected: %s\n", reason);
++            client_state = CLIENT_STATE_DISCONNECTED;
++            break;
++        }
++
++        case NET_PACKET_TYPE_WAITING_DATA:
++        {
++            // Server is waiting for more players
++            net_client_wait_data.num_players = 0;
++            NET_ReadInt8(packet, (unsigned int *)&net_client_wait_data.num_players);
++            NET_ReadInt8(packet, (unsigned int *)&net_client_wait_data.num_drones);
++            NET_ReadInt8(packet, (unsigned int *)&net_client_wait_data.ready_players);
++            NET_ReadInt8(packet, (unsigned int *)&net_client_wait_data.max_players);
++            NET_ReadInt8(packet, (unsigned int *)&net_client_wait_data.is_controller);
++            NET_ReadInt8(packet, (unsigned int *)&net_client_wait_data.consoleplayer);
++            net_client_received_wait_data = true;
++            break;
++        }
++
++        case NET_PACKET_TYPE_GAMESTART:
++        {
++            unsigned int random_val;
++            extern int prndindex;  // From m_random.c - P_Random seed
++            extern int rndindex;   // From m_random.c - M_Random seed (used in consistency)
++            
++            fprintf(stderr, "NET_CL_ParsePacket: Received GAMESTART!\n");
++            // Game is starting - read settings in CORRECT ORDER per chocolate-doom
++            // Order: ticdup, extratics, deathmatch, nomonsters, fast_monsters, respawn_monsters,
++            //        episode, map, skill, gameversion, lowres_turn, new_sync, timelimit(32!),
++            //        loadgame, random, num_players, consoleplayer, player_classes[]
++            NET_ReadInt8(packet, (unsigned int *)&received_settings.ticdup);
++            NET_ReadInt8(packet, (unsigned int *)&received_settings.extratics);
++            NET_ReadInt8(packet, (unsigned int *)&received_settings.deathmatch);
++            NET_ReadInt8(packet, (unsigned int *)&received_settings.nomonsters);
++            NET_ReadInt8(packet, (unsigned int *)&received_settings.fast_monsters);
++            NET_ReadInt8(packet, (unsigned int *)&received_settings.respawn_monsters);
++            NET_ReadInt8(packet, (unsigned int *)&received_settings.episode);
++            NET_ReadInt8(packet, (unsigned int *)&received_settings.map);
++            NET_ReadSInt8(packet, &received_settings.skill);
++            NET_ReadInt8(packet, (unsigned int *)&received_settings.gameversion);
++            NET_ReadInt8(packet, (unsigned int *)&received_settings.lowres_turn);
++            NET_ReadInt8(packet, (unsigned int *)&received_settings.new_sync);
++            NET_ReadInt32(packet, (unsigned int *)&received_settings.timelimit);  // INT32!
++            NET_ReadSInt8(packet, &received_settings.loadgame);
++            NET_ReadInt8(packet, &random_val);  // random field - CRITICAL for sync!
++            NET_ReadInt8(packet, (unsigned int *)&received_settings.num_players);
++            NET_ReadSInt8(packet, &received_settings.consoleplayer);
++            
++            // Set the random seed to match server - CRITICAL for game sync!
++            prndindex = random_val;
++            rndindex = random_val;
++            fprintf(stderr, "NET_CL_ParsePacket: Random seed set to %d\n", random_val);
++
++            fprintf(stderr, "NET_CL_ParsePacket: GAMESTART parsed: ep=%d map=%d players=%d console=%d\n",
++                    received_settings.episode, received_settings.map,
++                    received_settings.num_players, received_settings.consoleplayer);
++
++            for (int i = 0; i < received_settings.num_players && i < NET_MAXPLAYERS; i++)
++                NET_ReadInt8(packet, (unsigned int *)&received_settings.player_classes[i]);
++
++            received_settings_valid = true;
++            client_state = CLIENT_STATE_IN_GAME;
++            net_waiting_for_launch = false;
++            
++            // Initialize send queue, last_ticcmd, and receive window baseline
++            memset(send_queue, 0, sizeof(send_queue));
++            memset(&last_ticcmd, 0, sizeof(last_ticcmd));
++            memset(recvwindow_cmd_base, 0, sizeof(recvwindow_cmd_base));
++            recvwindow_start = 0;
++            
++            printf("NET_CL_ParsePacket: Game starting! We are player %d (consoleplayer=%d) of %d\n",
++                   received_settings.consoleplayer + 1,
++                   received_settings.consoleplayer,
++                   received_settings.num_players);
++            fprintf(stderr, "DEBUG: consoleplayer=%d, num_players=%d\n",
++                    received_settings.consoleplayer, received_settings.num_players);
++            break;
++        }
++
++        case NET_PACKET_TYPE_GAMEDATA:
++        {
++            // Game data from server - CORRECT FORMAT:
++            // int8: start_tic (low byte)
++            // int8: num_tics
++            // For each tic:
++            //   int16: latency
++            //   int8: playeringame bitfield (bit 0 = player 0, etc)
++            //   For each player in bitfield: ticcmd diff
++            
++            unsigned int start_tic;
++            unsigned int num_tics;
++            unsigned int tic_idx;
++            
++            if (!NET_ReadInt8(packet, &start_tic))
++                break;
++            if (!NET_ReadInt8(packet, &num_tics))
++                break;
++            
++            // Expand start_tic from low byte to full value
++            // (server only sends low byte, we reconstruct full value)
++            start_tic = NET_CL_ExpandTicNum(start_tic);
++            
++            // Process each tic in the packet
++            for (tic_idx = 0; tic_idx < num_tics; tic_idx++)
++            {
++                unsigned int current_tic = start_tic + tic_idx;
++                signed int latency;
++                unsigned int bitfield;
++                ticcmd_t ticcmds[NET_MAXPLAYERS];
++                boolean playeringame[NET_MAXPLAYERS];
++                
++                // Start from baseline (previous state), not zero!
++                memcpy(ticcmds, recvwindow_cmd_base, sizeof(ticcmds));
++                memset(playeringame, 0, sizeof(playeringame));
++                
++                // Read latency
++                if (!NET_ReadSInt16(packet, &latency))
++                    break;
++                
++                // Read playeringame BITFIELD (single byte, not 8 separate bytes!)
++                if (!NET_ReadInt8(packet, &bitfield))
++                    break;
++                
++                // Convert bitfield to array
++                for (int i = 0; i < NET_MAXPLAYERS; i++)
++                    playeringame[i] = (bitfield & (1 << i)) != 0;
++                
++                // Read ticcmd for each active player
++                for (int i = 0; i < NET_MAXPLAYERS; i++)
++                {
++                    if (playeringame[i])
++                    {
++                        unsigned int diff;
++                        signed int sval;
++                        unsigned int uval;
++                        
++                        if (!NET_ReadInt8(packet, &diff))
++                            break;
++                        
++                        // Skip our own player - we use our local ticcmd, not the relayed one
++                        // But we still need to read the diff data to advance the packet position
++                        if (i == received_settings.consoleplayer && !drone)
++                        {
++                            // Just skip the diff data - don't apply it
++                            if (diff & NET_TICDIFF_FORWARD)
++                                NET_ReadSInt8(packet, &sval);
++                            if (diff & NET_TICDIFF_SIDE)
++                                NET_ReadSInt8(packet, &sval);
++                            if (diff & NET_TICDIFF_TURN)
++                            {
++                                if (received_settings.lowres_turn)
++                                    NET_ReadSInt8(packet, &sval);
++                                else
++                                    NET_ReadSInt16(packet, &sval);
++                            }
++                            if (diff & NET_TICDIFF_BUTTONS)
++                                NET_ReadInt8(packet, &uval);
++                            if (diff & NET_TICDIFF_CONSISTANCY)
++                                NET_ReadInt8(packet, &uval);
++                            if (diff & NET_TICDIFF_CHATCHAR)
++                                NET_ReadInt8(packet, &uval);
++                            if (diff & NET_TICDIFF_RAVEN)
++                            {
++                                NET_ReadInt8(packet, &uval);
++                                NET_ReadInt8(packet, &uval);
++                            }
++                            if (diff & NET_TICDIFF_STRIFE)
++                            {
++                                NET_ReadInt8(packet, &uval);
++                                NET_ReadInt16(packet, &uval);
++                            }
++                            continue;  // Don't update baseline for our own player
++                        }
++                        
++                        // Now process other players' ticcmds normally
++                        if (diff & NET_TICDIFF_FORWARD)
++                        {
++                            NET_ReadSInt8(packet, &sval);
++                            ticcmds[i].forwardmove = sval;
++                        }
++                        if (diff & NET_TICDIFF_SIDE)
++                        {
++                            NET_ReadSInt8(packet, &sval);
++                            ticcmds[i].sidemove = sval;
++                        }
++                        if (diff & NET_TICDIFF_TURN)
++                        {
++                            // Check for lowres_turn mode
++                            if (received_settings.lowres_turn)
++                            {
++                                NET_ReadSInt8(packet, &sval);
++                                ticcmds[i].angleturn = sval * 256;
++                            }
++                            else
++                            {
++                                NET_ReadSInt16(packet, &sval);
++                                ticcmds[i].angleturn = sval;
++                            }
++                        }
++                        if (diff & NET_TICDIFF_BUTTONS)
++                        {
++                            NET_ReadInt8(packet, &uval);
++                            ticcmds[i].buttons = uval;
++                        }
++                        if (diff & NET_TICDIFF_CONSISTANCY)
++                        {
++                            NET_ReadInt8(packet, &uval);
++                            ticcmds[i].consistancy = uval;
++                        }
++                        // else: Consistency not in diff - using baseline value
++                        // Handle optional chatchar - MUST zero if not in diff (per Chocolate Doom)
++                        if (diff & NET_TICDIFF_CHATCHAR)
++                        {
++                            NET_ReadInt8(packet, &uval);
++                            ticcmds[i].chatchar = uval;
++                        }
++                        else
++                        {
++                            ticcmds[i].chatchar = 0;
++                        }
++                        
++                        // Raven (Heretic/Hexen) - not used in Doom but parse anyway
++                        if (diff & NET_TICDIFF_RAVEN)
++                        {
++                            NET_ReadInt8(packet, &uval);  // lookfly
++                            NET_ReadInt8(packet, &uval);  // arti
++                        }
++                        
++                        // Strife - not used in Doom but parse anyway
++                        if (diff & NET_TICDIFF_STRIFE)
++                        {
++                            NET_ReadInt8(packet, &uval);   // buttons2
++                            NET_ReadInt16(packet, &uval);  // inventory
++                        }
++                        
++                        // Update baseline for this player for next diff
++                        recvwindow_cmd_base[i] = ticcmds[i];
++                    }
++                }
++                
++                // Only deliver if this is the tic we're expecting
++                // This ensures sequential processing even if packets arrive out of order
++                if (current_tic == recvwindow_start)
++                {
++                    // Deliver to game loop
++                    D_ReceiveTic(ticcmds, playeringame);
++                    
++                    // Advance receive window
++                    recvwindow_start++;
++                }
++                // else if current_tic > recvwindow_start: out of order - skip
++                // else if current_tic < recvwindow_start: duplicate - ignore
++            }
++            
++            last_gamedata_time = I_GetTimeMS();
++            
++            // Send ACK after processing all tics
++            NET_CL_SendGameDataACK();
++            break;
++        }
++
++        case NET_PACKET_TYPE_GAMEDATA_RESEND:
++        {
++            // Server is asking us to resend our GAMEDATA
++            // The packet contains: start tic (int32) + num_tics (int8)
++            unsigned int start_tic;
++            unsigned int num_tics;
++            unsigned int end_tic;
++            
++            if (!NET_ReadInt32(packet, &start_tic))
++                break;
++            if (!NET_ReadInt8(packet, &num_tics))
++                break;
++            
++            end_tic = start_tic + num_tics - 1;
++            
++            // Trim range to what we actually have in send queue
++            while (start_tic <= end_tic
++                && (!send_queue[start_tic % BACKUPTICS].active
++                 || send_queue[start_tic % BACKUPTICS].seq != start_tic))
++            {
++                start_tic++;
++            }
++            
++            while (start_tic <= end_tic
++                && (!send_queue[end_tic % BACKUPTICS].active
++                 || send_queue[end_tic % BACKUPTICS].seq != end_tic))
++            {
++                end_tic--;
++            }
++            
++            // Resend the tics we have
++            if (start_tic <= end_tic)
++            {
++                NET_CL_SendTics(start_tic, end_tic);
++            }
++            break;
++        }
++
++        case NET_PACKET_TYPE_LAUNCH:
++        {
++            fprintf(stderr, "NET_CL_ParsePacket: Received LAUNCH signal!\n");
++            net_waiting_for_launch = false;
++            fprintf(stderr, "NET_CL_ParsePacket: net_waiting_for_launch = %d\n", net_waiting_for_launch);
++            break;
++        }
++
++        case NET_PACKET_TYPE_DISCONNECT:
++        case NET_PACKET_TYPE_DISCONNECT_ACK:
++        {
++            printf("NET_CL_ParsePacket: Server disconnected\n");
++            client_state = CLIENT_STATE_DISCONNECTED;
++            net_client_connected = false;
++            break;
++        }
++
++        default:
++            break;
++    }
++}
++
++void NET_CL_LaunchGame(void)
++{
++    net_packet_t *packet;
++
++    if (!net_client_connected)
++        return;
++
++    packet = NET_NewPacket(16);
++    if (packet != NULL)
++    {
++        NET_WriteInt16(packet, NET_PACKET_TYPE_LAUNCH);
++        NET_SendPacket(server_addr, packet);
++        NET_FreePacket(packet);
++    }
++}
++
++void NET_CL_StartGame(net_gamesettings_t *settings)
++{
++    // Send game start request - MUST match chocolate-doom NET_WriteSettings order
++    net_packet_t *packet;
++
++    if (!net_client_connected)
++        return;
++
++    fprintf(stderr, "NET_CL_StartGame: Sending GAMESTART request (reliable)\n");
++
++    packet = NET_NewPacket(64);
++    if (packet != NULL)
++    {
++        // Send as reliable packet: set NET_RELIABLE_PACKET flag + sequence
++        NET_WriteInt16(packet, NET_PACKET_TYPE_GAMESTART | NET_RELIABLE_PACKET);
++        NET_WriteInt8(packet, 0);  // Sequence number for reliable packet
++        NET_WriteInt8(packet, settings->ticdup);
++        NET_WriteInt8(packet, settings->extratics);
++        NET_WriteInt8(packet, settings->deathmatch);
++        NET_WriteInt8(packet, settings->nomonsters);
++        NET_WriteInt8(packet, settings->fast_monsters);
++        NET_WriteInt8(packet, settings->respawn_monsters);
++        NET_WriteInt8(packet, settings->episode);
++        NET_WriteInt8(packet, settings->map);
++        NET_WriteInt8(packet, settings->skill);
++        NET_WriteInt8(packet, settings->gameversion);
++        NET_WriteInt8(packet, settings->lowres_turn);
++        NET_WriteInt8(packet, settings->new_sync);
++        NET_WriteInt32(packet, settings->timelimit);  // INT32!
++        NET_WriteInt8(packet, settings->loadgame);
++        NET_WriteInt8(packet, 0);  // random
++
++        NET_SendPacket(server_addr, packet);
++        NET_FreePacket(packet);
++    }
++}
++
++// Write a single ticcmd diff to the packet
++static void WriteTiccmdDiff(net_packet_t *packet, net_send_queue_t *sendobj)
++{
++    unsigned int diff = sendobj->diff;
++    ticcmd_t *cmd = &sendobj->cmd;
++    
++    NET_WriteInt8(packet, diff);
++    
++    if (diff & NET_TICDIFF_FORWARD)
++        NET_WriteInt8(packet, (unsigned int)cmd->forwardmove);
++    if (diff & NET_TICDIFF_SIDE)
++        NET_WriteInt8(packet, (unsigned int)cmd->sidemove);
++    if (diff & NET_TICDIFF_TURN)
++    {
++        if (received_settings.lowres_turn)
++            NET_WriteInt8(packet, cmd->angleturn >> 8);
++        else
++            NET_WriteInt16(packet, cmd->angleturn);
++    }
++    if (diff & NET_TICDIFF_BUTTONS)
++        NET_WriteInt8(packet, cmd->buttons);
++    if (diff & NET_TICDIFF_CONSISTANCY)
++        NET_WriteInt8(packet, cmd->consistancy);
++}
++
++// Send ticcmds from starttic to endtic
++static void NET_CL_SendTics(int starttic, int endtic)
++{
++    net_packet_t *packet;
++    int i;
++    
++    if (!net_client_connected || client_state != CLIENT_STATE_IN_GAME)
++        return;
++    
++    if (starttic < 0)
++        starttic = 0;
++    
++    packet = NET_NewPacket(512);
++    if (packet == NULL)
++        return;
++    
++    // Header: type, ack, start, num_tics
++    NET_WriteInt16(packet, NET_PACKET_TYPE_GAMEDATA);
++    NET_WriteInt8(packet, recvwindow_start & 0xFF);
++    NET_WriteInt8(packet, starttic & 0xFF);
++    NET_WriteInt8(packet, endtic - starttic + 1);
++    
++    // Write each tic - but first count how many we actually have
++    int actual_tics = 0;
++    for (i = starttic; i <= endtic; i++)
++    {
++        net_send_queue_t *sendobj = &send_queue[i % BACKUPTICS];
++        if (sendobj->active && sendobj->seq == (unsigned int)i)
++            actual_tics++;
++        else
++            break;  // Stop at first missing tic
++    }
++    
++    if (actual_tics == 0)
++    {
++        NET_FreePacket(packet);
++        return;
++    }
++    
++    // Update num_tics in packet (position 4, after type(2)+ack(1)+start(1))
++    packet->data[4] = actual_tics;
++    
++    // Write each tic
++    for (i = starttic; i < starttic + actual_tics; i++)
++    {
++        net_send_queue_t *sendobj = &send_queue[i % BACKUPTICS];
++        
++        // Latency - time since we created this tic
++        int latency = I_GetTimeMS() - sendobj->time;
++        if (latency < 0) latency = 0;
++        NET_WriteInt16(packet, latency);
++        
++        // Ticcmd diff
++        WriteTiccmdDiff(packet, sendobj);
++    }
++    
++    NET_SendPacket(server_addr, packet);
++    NET_FreePacket(packet);
++}
++
++void NET_CL_SendTiccmd(ticcmd_t *ticcmd, int maketic)
++{
++    net_send_queue_t *sendobj;
++    unsigned int diff = 0;
++    int starttic, endtic;
++    
++    if (!net_client_connected || client_state != CLIENT_STATE_IN_GAME)
++        return;
++    
++    // Calculate diff from last command
++    if (ticcmd->forwardmove != last_ticcmd.forwardmove)
++        diff |= NET_TICDIFF_FORWARD;
++    if (ticcmd->sidemove != last_ticcmd.sidemove)
++        diff |= NET_TICDIFF_SIDE;
++    if (ticcmd->angleturn != last_ticcmd.angleturn)
++        diff |= NET_TICDIFF_TURN;
++    if (ticcmd->buttons != last_ticcmd.buttons)
++        diff |= NET_TICDIFF_BUTTONS;
++    // ALWAYS include consistency - critical for game sync!
++    diff |= NET_TICDIFF_CONSISTANCY;
++    
++    // Store in send queue
++    sendobj = &send_queue[maketic % BACKUPTICS];
++    sendobj->active = true;
++    sendobj->seq = maketic;
++    sendobj->time = I_GetTimeMS();
++    sendobj->diff = diff;
++    sendobj->cmd = *ticcmd;
++    
++    // Update last ticcmd for future diffs
++    last_ticcmd = *ticcmd;
++    
++    // Send just the current tic for now (simpler - avoid extratics complexity)
++    starttic = maketic;
++    endtic = maketic;
++    
++    NET_CL_SendTics(starttic, endtic);
++}
++
++boolean NET_CL_GetSettings(net_gamesettings_t *settings)
++{
++    if (!received_settings_valid)
++        return false;
++
++    memcpy(settings, &received_settings, sizeof(net_gamesettings_t));
++    return true;
++}
++
++void NET_Init(void)
++{
++    NET_CL_Init();
++}
++
++void NET_BindVariables(void)
++{
++    // Could bind config variables here
++}
++
++void NET_WaitForLaunch(void)
++{
++    int timeout;
++    net_gamesettings_t settings;
++    
++    net_waiting_for_launch = true;
++
++    fprintf(stderr, "NET_WaitForLaunch: Waiting for game launch...\n");
++
++    while (net_waiting_for_launch && net_client_connected)
++    {
++        NET_CL_Run();
++        I_Sleep(50);
++    }
++    
++    fprintf(stderr, "NET_WaitForLaunch: Got LAUNCH! Sending GAMESTART request...\n");
++    
++    // Send our game settings to server
++    memset(&settings, 0, sizeof(settings));
++    settings.ticdup = 1;
++    settings.extratics = 1;
++    settings.deathmatch = 0;
++    settings.episode = 1;
++    settings.map = 1;
++    settings.skill = 2;  // Medium
++    settings.gameversion = 0;
++    settings.lowres_turn = 0;
++    settings.new_sync = 0;
++    settings.timelimit = 0;
++    settings.loadgame = -1;
++    
++    NET_CL_StartGame(&settings);
++    fprintf(stderr, "NET_WaitForLaunch: Sent GAMESTART, waiting for response...\n");
++    
++    // After sending GAMESTART, wait for GAMESTART response with final settings
++    timeout = 0;
++    while (!received_settings_valid && net_client_connected && timeout < 100)
++    {
++        NET_CL_Run();
++        I_Sleep(50);
++        timeout++;
++    }
++    
++    fprintf(stderr, "NET_WaitForLaunch: Exited! settings_valid=%d connected=%d timeout=%d\n", 
++            received_settings_valid, net_client_connected, timeout);
++}
++
++net_addr_t *NET_FindLANServer(void)
++{
++    // LAN discovery not implemented
++    return NULL;
++}
++
++
++
+diff --git a/doomgeneric/net_dedicated.c b/doomgeneric/net_dedicated.c
+new file mode 100644
+--- /dev/null
++++ b/doomgeneric/net_dedicated.c
+@@ -0,0 +1,19 @@
++//
++// Copyright(C) 2005-2014 Simon Howard
++// Copyright(C) 2026 WiFi Pineapple Pager port
++//
++// Dedicated server mode - stub
++//
++
++#include <stdio.h>
++
++#include "i_system.h"
++#include "net_dedicated.h"
++
++void NET_DedicatedServer(void)
++{
++    I_Error("Dedicated server mode not implemented");
++}
++
++
++
+diff --git a/doomgeneric/net_io.c b/doomgeneric/net_io.c
+new file mode 100644
+--- /dev/null
++++ b/doomgeneric/net_io.c
+@@ -0,0 +1,112 @@
++//
++// Copyright(C) 2005-2014 Simon Howard
++// Copyright(C) 2026 WiFi Pineapple Pager port
++//
++// Network I/O layer - manages network contexts and modules
++//
++
++#include <stdlib.h>
++#include <string.h>
++
++#include "net_io.h"
++#include "net_packet.h"
++
++#define MAX_MODULES 16
++
++struct _net_context_s
++{
++    net_module_t *modules[MAX_MODULES];
++    int num_modules;
++};
++
++// Broadcast address placeholder
++net_addr_t net_broadcast_addr;
++
++net_context_t *NET_NewContext(void)
++{
++    net_context_t *context;
++
++    context = malloc(sizeof(net_context_t));
++    if (context == NULL)
++        return NULL;
++
++    context->num_modules = 0;
++    return context;
++}
++
++void NET_AddModule(net_context_t *context, net_module_t *module)
++{
++    if (context->num_modules >= MAX_MODULES)
++        return;
++
++    context->modules[context->num_modules] = module;
++    context->num_modules++;
++}
++
++void NET_SendPacket(net_addr_t *addr, net_packet_t *packet)
++{
++    if (addr == NULL || addr->module == NULL)
++        return;
++
++    addr->module->SendPacket(addr, packet);
++}
++
++void NET_SendBroadcast(net_context_t *context, net_packet_t *packet)
++{
++    // For now, broadcast is not implemented
++    // Would need to send to 255.255.255.255 on each module
++}
++
++boolean NET_RecvPacket(net_context_t *context, net_addr_t **addr,
++                       net_packet_t **packet)
++{
++    int i;
++
++    for (i = 0; i < context->num_modules; i++)
++    {
++        if (context->modules[i]->RecvPacket(addr, packet))
++            return true;
++    }
++
++    return false;
++}
++
++char *NET_AddrToString(net_addr_t *addr)
++{
++    static char buffer[128];
++
++    if (addr == NULL || addr->module == NULL)
++    {
++        strcpy(buffer, "(null)");
++        return buffer;
++    }
++
++    addr->module->AddrToString(addr, buffer, sizeof(buffer));
++    return buffer;
++}
++
++void NET_FreeAddress(net_addr_t *addr)
++{
++    if (addr == NULL || addr->module == NULL)
++        return;
++
++    addr->module->FreeAddress(addr);
++}
++
++net_addr_t *NET_ResolveAddress(net_context_t *context, char *address)
++{
++    net_addr_t *result;
++    int i;
++
++    for (i = 0; i < context->num_modules; i++)
++    {
++        result = context->modules[i]->ResolveAddress(address);
++        if (result != NULL)
++            return result;
++    }
++
++    return NULL;
++}
++
++
++
+diff --git a/doomgeneric/net_loop.c b/doomgeneric/net_loop.c
+new file mode 100644
+--- /dev/null
++++ b/doomgeneric/net_loop.c
+@@ -0,0 +1,192 @@
++//
++// Copyright(C) 2005-2014 Simon Howard
++// Copyright(C) 2026 WiFi Pineapple Pager port
++//
++// Loopback network module - for local server in same process
++//
++
++#include <stdlib.h>
++#include <string.h>
++
++#include "doomtype.h"
++#include "net_defs.h"
++#include "net_loop.h"
++#include "net_packet.h"
++
++#define MAX_QUEUE_SIZE 16
++
++typedef struct
++{
++    net_packet_t *packets[MAX_QUEUE_SIZE];
++    int head;
++    int tail;
++} packet_queue_t;
++
++static packet_queue_t client_queue;
++static packet_queue_t server_queue;
++static boolean client_initialized = false;
++static boolean server_initialized = false;
++
++// Loopback address
++static net_addr_t loopback_addr;
++
++static void QueueInit(packet_queue_t *queue)
++{
++    queue->head = 0;
++    queue->tail = 0;
++}
++
++static void QueuePush(packet_queue_t *queue, net_packet_t *packet)
++{
++    int next = (queue->head + 1) % MAX_QUEUE_SIZE;
++
++    if (next == queue->tail)
++    {
++        // Queue full, drop oldest
++        NET_FreePacket(queue->packets[queue->tail]);
++        queue->tail = (queue->tail + 1) % MAX_QUEUE_SIZE;
++    }
++
++    queue->packets[queue->head] = NET_PacketDup(packet);
++    queue->head = next;
++}
++
++static net_packet_t *QueuePop(packet_queue_t *queue)
++{
++    net_packet_t *packet;
++
++    if (queue->head == queue->tail)
++        return NULL;
++
++    packet = queue->packets[queue->tail];
++    queue->tail = (queue->tail + 1) % MAX_QUEUE_SIZE;
++
++    return packet;
++}
++
++// Client module functions
++
++static boolean NET_Loop_Client_InitClient(void)
++{
++    QueueInit(&client_queue);
++    client_initialized = true;
++    return true;
++}
++
++static boolean NET_Loop_Client_InitServer(void)
++{
++    return false;  // Client module can't be server
++}
++
++static void NET_Loop_Client_SendPacket(net_addr_t *addr, net_packet_t *packet)
++{
++    if (server_initialized)
++    {
++        QueuePush(&server_queue, packet);
++    }
++}
++
++static boolean NET_Loop_Client_RecvPacket(net_addr_t **addr, net_packet_t **packet)
++{
++    *packet = QueuePop(&client_queue);
++
++    if (*packet == NULL)
++        return false;
++
++    *addr = &loopback_addr;
++    return true;
++}
++
++static void NET_Loop_Client_AddrToString(net_addr_t *addr, char *buffer, int buffer_len)
++{
++    snprintf(buffer, buffer_len, "loopback");
++}
++
++static void NET_Loop_Client_FreeAddress(net_addr_t *addr)
++{
++    // Loopback address is static
++}
++
++static net_addr_t *NET_Loop_Client_ResolveAddress(char *addr)
++{
++    if (addr == NULL)
++    {
++        loopback_addr.module = &net_loop_client_module;
++        loopback_addr.handle = NULL;
++        return &loopback_addr;
++    }
++    return NULL;
++}
++
++// Server module functions
++
++static boolean NET_Loop_Server_InitClient(void)
++{
++    return false;  // Server module can't be client
++}
++
++static boolean NET_Loop_Server_InitServer(void)
++{
++    QueueInit(&server_queue);
++    server_initialized = true;
++    return true;
++}
++
++static void NET_Loop_Server_SendPacket(net_addr_t *addr, net_packet_t *packet)
++{
++    if (client_initialized)
++    {
++        QueuePush(&client_queue, packet);
++    }
++}
++
++static boolean NET_Loop_Server_RecvPacket(net_addr_t **addr, net_packet_t **packet)
++{
++    *packet = QueuePop(&server_queue);
++
++    if (*packet == NULL)
++        return false;
++
++    *addr = &loopback_addr;
++    return true;
++}
++
++static void NET_Loop_Server_AddrToString(net_addr_t *addr, char *buffer, int buffer_len)
++{
++    snprintf(buffer, buffer_len, "loopback");
++}
++
++static void NET_Loop_Server_FreeAddress(net_addr_t *addr)
++{
++    // Loopback address is static
++}
++
++static net_addr_t *NET_Loop_Server_ResolveAddress(char *addr)
++{
++    return NULL;
++}
++
++net_module_t net_loop_client_module =
++{
++    NET_Loop_Client_InitClient,
++    NET_Loop_Client_InitServer,
++    NET_Loop_Client_SendPacket,
++    NET_Loop_Client_RecvPacket,
++    NET_Loop_Client_AddrToString,
++    NET_Loop_Client_FreeAddress,
++    NET_Loop_Client_ResolveAddress,
++};
++
++net_module_t net_loop_server_module =
++{
++    NET_Loop_Server_InitClient,
++    NET_Loop_Server_InitServer,
++    NET_Loop_Server_SendPacket,
++    NET_Loop_Server_RecvPacket,
++    NET_Loop_Server_AddrToString,
++    NET_Loop_Server_FreeAddress,
++    NET_Loop_Server_ResolveAddress,
++};
++
++
++
+diff --git a/doomgeneric/net_packet.c b/doomgeneric/net_packet.c
+new file mode 100644
+--- /dev/null
++++ b/doomgeneric/net_packet.c
+@@ -0,0 +1,203 @@
++//
++// Copyright(C) 2005-2014 Simon Howard
++// Copyright(C) 2026 WiFi Pineapple Pager port
++//
++// Network packet buffer management
++//
++
++#include <stdlib.h>
++#include <string.h>
++
++#include "net_packet.h"
++
++net_packet_t *NET_NewPacket(int initial_size)
++{
++    net_packet_t *packet;
++
++    packet = malloc(sizeof(net_packet_t));
++    if (packet == NULL)
++        return NULL;
++
++    packet->alloced = initial_size;
++    packet->data = malloc(initial_size);
++    if (packet->data == NULL)
++    {
++        free(packet);
++        return NULL;
++    }
++
++    packet->len = 0;
++    packet->pos = 0;
++
++    return packet;
++}
++
++net_packet_t *NET_PacketDup(net_packet_t *packet)
++{
++    net_packet_t *newpacket;
++
++    newpacket = NET_NewPacket(packet->len);
++    if (newpacket == NULL)
++        return NULL;
++
++    memcpy(newpacket->data, packet->data, packet->len);
++    newpacket->len = packet->len;
++
++    return newpacket;
++}
++
++void NET_FreePacket(net_packet_t *packet)
++{
++    free(packet->data);
++    free(packet);
++}
++
++// Ensure packet has enough space for 'size' more bytes
++static boolean NET_EnsureSpace(net_packet_t *packet, size_t size)
++{
++    size_t newsize;
++    byte *newdata;
++
++    if (packet->len + size <= packet->alloced)
++        return true;
++
++    // Need to grow the buffer
++    newsize = packet->alloced * 2;
++    while (newsize < packet->len + size)
++        newsize *= 2;
++
++    newdata = realloc(packet->data, newsize);
++    if (newdata == NULL)
++        return false;
++
++    packet->data = newdata;
++    packet->alloced = newsize;
++    return true;
++}
++
++// Read functions
++boolean NET_ReadInt8(net_packet_t *packet, unsigned int *data)
++{
++    if (packet->pos + 1 > packet->len)
++        return false;
++
++    *data = packet->data[packet->pos];
++    packet->pos += 1;
++    return true;
++}
++
++boolean NET_ReadInt16(net_packet_t *packet, unsigned int *data)
++{
++    if (packet->pos + 2 > packet->len)
++        return false;
++
++    // Big-endian (network byte order) - high byte first
++    *data = (packet->data[packet->pos] << 8)
++          | packet->data[packet->pos + 1];
++    packet->pos += 2;
++    return true;
++}
++
++boolean NET_ReadInt32(net_packet_t *packet, unsigned int *data)
++{
++    if (packet->pos + 4 > packet->len)
++        return false;
++
++    // Big-endian (network byte order) - highest byte first
++    *data = (packet->data[packet->pos] << 24)
++          | (packet->data[packet->pos + 1] << 16)
++          | (packet->data[packet->pos + 2] << 8)
++          | packet->data[packet->pos + 3];
++    packet->pos += 4;
++    return true;
++}
++
++boolean NET_ReadSInt8(net_packet_t *packet, signed int *data)
++{
++    unsigned int udata;
++    if (!NET_ReadInt8(packet, &udata))
++        return false;
++    *data = (signed char)udata;
++    return true;
++}
++
++boolean NET_ReadSInt16(net_packet_t *packet, signed int *data)
++{
++    unsigned int udata;
++    if (!NET_ReadInt16(packet, &udata))
++        return false;
++    *data = (signed short)udata;
++    return true;
++}
++
++boolean NET_ReadSInt32(net_packet_t *packet, signed int *data)
++{
++    if (!NET_ReadInt32(packet, (unsigned int *)data))
++        return false;
++    return true;
++}
++
++char *NET_ReadString(net_packet_t *packet)
++{
++    char *start;
++
++    start = (char *)packet->data + packet->pos;
++
++    // Search for NUL terminator
++    while (packet->pos < packet->len && packet->data[packet->pos] != '\0')
++        packet->pos++;
++
++    if (packet->pos >= packet->len)
++        return NULL;  // No terminator found
++
++    packet->pos++;  // Skip the NUL
++    return start;
++}
++
++// Write functions
++void NET_WriteInt8(net_packet_t *packet, unsigned int i)
++{
++    if (!NET_EnsureSpace(packet, 1))
++        return;
++
++    packet->data[packet->len] = i & 0xff;
++    packet->len += 1;
++}
++
++void NET_WriteInt16(net_packet_t *packet, unsigned int i)
++{
++    if (!NET_EnsureSpace(packet, 2))
++        return;
++
++    // Big-endian (network byte order) - high byte first
++    packet->data[packet->len] = (i >> 8) & 0xff;
++    packet->data[packet->len + 1] = i & 0xff;
++    packet->len += 2;
++}
++
++void NET_WriteInt32(net_packet_t *packet, unsigned int i)
++{
++    if (!NET_EnsureSpace(packet, 4))
++        return;
++
++    // Big-endian (network byte order) - highest byte first
++    packet->data[packet->len] = (i >> 24) & 0xff;
++    packet->data[packet->len + 1] = (i >> 16) & 0xff;
++    packet->data[packet->len + 2] = (i >> 8) & 0xff;
++    packet->data[packet->len + 3] = i & 0xff;
++    packet->len += 4;
++}
++
++void NET_WriteString(net_packet_t *packet, char *string)
++{
++    size_t len = strlen(string) + 1;
++
++    if (!NET_EnsureSpace(packet, len))
++        return;
++
++    memcpy(packet->data + packet->len, string, len);
++    packet->len += len;
++}
++
++
++
+diff --git a/doomgeneric/net_query.c b/doomgeneric/net_query.c
+new file mode 100644
+--- /dev/null
++++ b/doomgeneric/net_query.c
+@@ -0,0 +1,29 @@
++//
++// Copyright(C) 2005-2014 Simon Howard
++// Copyright(C) 2026 WiFi Pineapple Pager port
++//
++// Server query functions - stubs for client-only mode
++//
++
++#include <stdio.h>
++
++#include "doomtype.h"
++#include "net_query.h"
++
++void NET_QueryAddress(char *addr)
++{
++    printf("Server query not implemented\n");
++}
++
++void NET_LANQuery(void)
++{
++    printf("LAN query not implemented\n");
++}
++
++void NET_MasterQuery(void)
++{
++    printf("Master server query not implemented\n");
++}
++
++
++
+diff --git a/doomgeneric/net_server.c b/doomgeneric/net_server.c
+new file mode 100644
+--- /dev/null
++++ b/doomgeneric/net_server.c
+@@ -0,0 +1,54 @@
++//
++// Copyright(C) 2005-2014 Simon Howard
++// Copyright(C) 2026 WiFi Pineapple Pager port
++//
++// Network server code - minimal implementation for client-only mode
++//
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "doomtype.h"
++#include "net_defs.h"
++#include "net_server.h"
++
++static net_module_t *server_modules[16];
++static int num_server_modules = 0;
++static boolean server_initialized = false;
++
++void NET_SV_Init(void)
++{
++    if (server_initialized)
++        return;
++
++    printf("NET_SV_Init: Server mode not fully implemented\n");
++    server_initialized = true;
++}
++
++void NET_SV_Run(void)
++{
++    // Server tick - not implemented for client-only mode
++}
++
++void NET_SV_Shutdown(void)
++{
++    server_initialized = false;
++}
++
++void NET_SV_AddModule(net_module_t *module)
++{
++    if (num_server_modules >= 16)
++        return;
++
++    server_modules[num_server_modules++] = module;
++}
++
++void NET_SV_RegisterWithMaster(void)
++{
++    // Master server registration - not implemented
++    printf("NET_SV_RegisterWithMaster: Not implemented\n");
++}
++
++
++
+diff --git a/doomgeneric/net_socket.c b/doomgeneric/net_socket.c
+new file mode 100644
+--- /dev/null
++++ b/doomgeneric/net_socket.c
+@@ -0,0 +1,298 @@
++//
++// Copyright(C) 2026 WiFi Pineapple Pager port
++//
++// POSIX socket-based network module (replaces SDL_net)
++//
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <errno.h>
++#include <fcntl.h>
++#include <sys/types.h>
++#include <sys/socket.h>
++#include <netinet/in.h>
++#include <arpa/inet.h>
++#include <netdb.h>
++
++#include "doomtype.h"
++#include "net_defs.h"
++#include "net_packet.h"
++#include "net_socket.h"
++
++#define DEFAULT_PORT 2342  // Chocolate Doom default port
++
++// Socket address wrapper
++typedef struct
++{
++    struct sockaddr_in addr;
++    int refcount;
++} socket_addr_t;
++
++static int client_socket = -1;
++static int server_socket = -1;
++
++// Set socket to non-blocking mode
++static boolean SetNonBlocking(int sock)
++{
++    int flags = fcntl(sock, F_GETFL, 0);
++    if (flags < 0)
++        return false;
++    return fcntl(sock, F_SETFL, flags | O_NONBLOCK) >= 0;
++}
++
++static boolean NET_Socket_InitClient(void)
++{
++    client_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
++    if (client_socket < 0)
++    {
++        fprintf(stderr, "NET_Socket_InitClient: Failed to create socket\n");
++        return false;
++    }
++
++    if (!SetNonBlocking(client_socket))
++    {
++        fprintf(stderr, "NET_Socket_InitClient: Failed to set non-blocking\n");
++        close(client_socket);
++        client_socket = -1;
++        return false;
++    }
++
++    return true;
++}
++
++static boolean NET_Socket_InitServer(void)
++{
++    struct sockaddr_in addr;
++
++    server_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
++    if (server_socket < 0)
++    {
++        fprintf(stderr, "NET_Socket_InitServer: Failed to create socket\n");
++        return false;
++    }
++
++    // Allow address reuse
++    int opt = 1;
++    setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
++
++    memset(&addr, 0, sizeof(addr));
++    addr.sin_family = AF_INET;
++    addr.sin_addr.s_addr = INADDR_ANY;
++    addr.sin_port = htons(DEFAULT_PORT);
++
++    if (bind(server_socket, (struct sockaddr *)&addr, sizeof(addr)) < 0)
++    {
++        fprintf(stderr, "NET_Socket_InitServer: Failed to bind to port %d\n", DEFAULT_PORT);
++        close(server_socket);
++        server_socket = -1;
++        return false;
++    }
++
++    if (!SetNonBlocking(server_socket))
++    {
++        fprintf(stderr, "NET_Socket_InitServer: Failed to set non-blocking\n");
++        close(server_socket);
++        server_socket = -1;
++        return false;
++    }
++
++    return true;
++}
++
++static void NET_Socket_SendPacket(net_addr_t *addr, net_packet_t *packet)
++{
++    socket_addr_t *sockaddr;
++    int sock;
++    ssize_t result;
++
++    sockaddr = (socket_addr_t *)addr->handle;
++
++    // Use server socket if available, otherwise client socket
++    sock = (server_socket >= 0) ? server_socket : client_socket;
++    if (sock < 0)
++    {
++        fprintf(stderr, "NET_Socket_SendPacket: No socket available\n");
++        return;
++    }
++
++    result = sendto(sock, packet->data, packet->len, 0,
++           (struct sockaddr *)&sockaddr->addr, sizeof(sockaddr->addr));
++    
++    (void)result;  // Suppress unused warning - logging removed for performance
++}
++
++static boolean NET_Socket_RecvPacket(net_addr_t **addr, net_packet_t **packet)
++{
++    struct sockaddr_in from_addr;
++    socklen_t from_len = sizeof(from_addr);
++    ssize_t len;
++    int sock;
++    byte buffer[2048];
++    socket_addr_t *sockaddr;
++    net_addr_t *netaddr;
++
++    // Use server socket if available, otherwise client socket
++    sock = (server_socket >= 0) ? server_socket : client_socket;
++    if (sock < 0)
++    {
++        fprintf(stderr, "NET_Socket_RecvPacket: No socket (server=%d, client=%d)\n",
++                server_socket, client_socket);
++        return false;
++    }
++
++    len = recvfrom(sock, buffer, sizeof(buffer), 0,
++                   (struct sockaddr *)&from_addr, &from_len);
++
++    if (len < 0)
++    {
++        // No data available (would block)
++        if (errno == EAGAIN || errno == EWOULDBLOCK)
++            return false;
++        fprintf(stderr, "NET_Socket_RecvPacket: recvfrom error: %s\n", strerror(errno));
++        return false;
++    }
++
++    if (len == 0)
++        return false;
++
++    // Create packet
++    *packet = NET_NewPacket(len);
++    if (*packet == NULL)
++        return false;
++
++    memcpy((*packet)->data, buffer, len);
++    (*packet)->len = len;
++
++    // Create address
++    sockaddr = malloc(sizeof(socket_addr_t));
++    if (sockaddr == NULL)
++    {
++        NET_FreePacket(*packet);
++        return false;
++    }
++
++    memcpy(&sockaddr->addr, &from_addr, sizeof(from_addr));
++    sockaddr->refcount = 1;
++
++    netaddr = malloc(sizeof(net_addr_t));
++    if (netaddr == NULL)
++    {
++        free(sockaddr);
++        NET_FreePacket(*packet);
++        return false;
++    }
++
++    netaddr->module = &net_socket_module;
++    netaddr->handle = sockaddr;
++    *addr = netaddr;
++
++    return true;
++}
++
++static void NET_Socket_AddrToString(net_addr_t *addr, char *buffer, int buffer_len)
++{
++    socket_addr_t *sockaddr = (socket_addr_t *)addr->handle;
++
++    snprintf(buffer, buffer_len, "%s:%d",
++             inet_ntoa(sockaddr->addr.sin_addr),
++             ntohs(sockaddr->addr.sin_port));
++}
++
++static void NET_Socket_FreeAddress(net_addr_t *addr)
++{
++    socket_addr_t *sockaddr = (socket_addr_t *)addr->handle;
++
++    sockaddr->refcount--;
++    if (sockaddr->refcount <= 0)
++    {
++        free(sockaddr);
++    }
++    free(addr);
++}
++
++static net_addr_t *NET_Socket_ResolveAddress(char *address)
++{
++    socket_addr_t *sockaddr;
++    net_addr_t *netaddr;
++    struct hostent *host;
++    char *addr_str;
++    char *port_str;
++    char addr_copy[256];
++    int port = DEFAULT_PORT;
++
++    // Parse address:port
++    strncpy(addr_copy, address, sizeof(addr_copy) - 1);
++    addr_copy[sizeof(addr_copy) - 1] = '\0';
++
++    addr_str = addr_copy;
++    port_str = strchr(addr_copy, ':');
++    if (port_str != NULL)
++    {
++        *port_str = '\0';
++        port_str++;
++        port = atoi(port_str);
++    }
++
++    sockaddr = malloc(sizeof(socket_addr_t));
++    if (sockaddr == NULL)
++        return NULL;
++
++    memset(&sockaddr->addr, 0, sizeof(sockaddr->addr));
++    sockaddr->addr.sin_family = AF_INET;
++    sockaddr->addr.sin_port = htons(port);
++    sockaddr->refcount = 1;
++
++    // Try as IP address first
++    if (inet_aton(addr_str, &sockaddr->addr.sin_addr) == 0)
++    {
++        // Try DNS lookup
++        host = gethostbyname(addr_str);
++        if (host == NULL)
++        {
++            fprintf(stderr, "NET_Socket_ResolveAddress: Failed to resolve '%s'\n", addr_str);
++            free(sockaddr);
++            return NULL;
++        }
++        memcpy(&sockaddr->addr.sin_addr, host->h_addr_list[0], host->h_length);
++    }
++
++    netaddr = malloc(sizeof(net_addr_t));
++    if (netaddr == NULL)
++    {
++        free(sockaddr);
++        return NULL;
++    }
++
++    netaddr->module = &net_socket_module;
++    netaddr->handle = sockaddr;
++
++    return netaddr;
++}
++
++void NET_Socket_Shutdown(void)
++{
++    if (client_socket >= 0)
++    {
++        close(client_socket);
++        client_socket = -1;
++    }
++    if (server_socket >= 0)
++    {
++        close(server_socket);
++        server_socket = -1;
++    }
++}
++
++net_module_t net_socket_module =
++{
++    NET_Socket_InitClient,
++    NET_Socket_InitServer,
++    NET_Socket_SendPacket,
++    NET_Socket_RecvPacket,
++    NET_Socket_AddrToString,
++    NET_Socket_FreeAddress,
++    NET_Socket_ResolveAddress,
++};
++
+diff --git a/doomgeneric/net_socket.h b/doomgeneric/net_socket.h
+new file mode 100644
+--- /dev/null
++++ b/doomgeneric/net_socket.h
+@@ -0,0 +1,19 @@
++//
++// Copyright(C) 2026 WiFi Pineapple Pager port
++//
++// POSIX socket-based network module
++//
++
++#ifndef NET_SOCKET_H
++#define NET_SOCKET_H
++
++#include "net_defs.h"
++
++extern net_module_t net_socket_module;
++
++void NET_Socket_Shutdown(void);
++
++#endif /* #ifndef NET_SOCKET_H */
++
++
++
+--- a/doomgeneric/Makefile.mipsel
++++ b/doomgeneric/Makefile.mipsel
+@@ -37,7 +37,12 @@ OBJDIR=build
+ OUTPUT=doomgeneric
+ 
+ SRC_DOOM = dummy.o am_map.o doomdef.o doomstat.o dstrings.o d_event.o d_items.o d_iwad.o d_loop.o d_main.o d_mode.o d_net.o f_finale.o f_wipe.o g_game.o hu_lib.o hu_stuff.o info.o i_cdmus.o i_endoom.o i_joystick.o i_scale.o i_sound.o i_system.o i_timer.o memio.o m_argv.o m_bbox.o m_cheat.o m_config.o m_controls.o m_fixed.o m_menu.o m_misc.o m_random.o p_ceilng.o p_doors.o p_enemy.o p_floor.o p_inter.o p_lights.o p_map.o p_maputl.o p_mobj.o p_plats.o p_pspr.o p_saveg.o p_setup.o p_sight.o p_spec.o p_switch.o p_telept.o p_tick.o p_user.o r_bsp.o r_data.o r_draw.o r_main.o r_plane.o r_segs.o r_sky.o r_things.o sha1.o sounds.o statdump.o st_lib.o st_stuff.o s_sound.o tables.o v_video.o wi_stuff.o w_checksum.o w_file.o w_main.o w_wad.o z_zone.o w_file_stdc.o i_input.o i_video.o doomgeneric.o doomgeneric_linuxvt.o mus2mid.o
++
++# Network sources for multiplayer support
++SRC_NET = net_packet.o net_io.o net_socket.o net_client.o net_server.o net_loop.o net_query.o net_dedicated.o
++
+ OBJS += $(addprefix $(OBJDIR)/, $(SRC_DOOM))
++OBJS += $(addprefix $(OBJDIR)/, $(SRC_NET))
+ 
+ all:	 $(OUTPUT)
+ 
+
