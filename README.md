@@ -121,11 +121,7 @@ Connect to our public DOOM server for multiplayer deathmatch with other Pager an
 
 ![Custom Deathmatch Loby](deathmatch.png)
 
-Use `payload-deathmatch.sh` or run manually:
-
-```bash
-./doomgeneric -iwad doom1.wad -connect 64.227.99.100:2342
-```
+Run the `games` -> `DOOM Deathmatch` payload.
 
 Desktop players can join with Chocolate Doom:
 ```bash
