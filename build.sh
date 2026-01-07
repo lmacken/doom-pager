@@ -102,9 +102,31 @@ fi
 
 # 4. Apply patches & build
 echo "[4/6] Patching and building..."
-echo "  - Applying patches with git am..."
-git -C "$BUILD_DIR/doomgeneric" am "$SCRIPT_DIR/patches/0001-WiFi-Pineapple-Pager-support.patch"
-git -C "$BUILD_DIR/doomgeneric" am "$SCRIPT_DIR/patches/0002-Multiplayer-deathmatch-support.patch"
+
+# Apply pager patch first
+echo "  - Applying wifi-pineapple-pager.patch..."
+git -C "$BUILD_DIR/doomgeneric" apply "$SCRIPT_DIR/patches/wifi-pineapple-pager.patch"
+
+# Commit the pager patch so we can use 3-way merge for multiplayer
+git -C "$BUILD_DIR/doomgeneric" add -A
+git -C "$BUILD_DIR/doomgeneric" commit -m "pager patch" --quiet
+
+# multiplayer.patch creates a new Makefile.mipsel with network objects
+# Delete only Makefile.mipsel (keep qemu-gcc-wrapper.sh - it's used by the new Makefile)
+echo "  - Applying multiplayer.patch..."
+rm -f "$BUILD_DIR/doomgeneric/doomgeneric/Makefile.mipsel"
+git -C "$BUILD_DIR/doomgeneric" apply --3way "$SCRIPT_DIR/patches/multiplayer.patch" || {
+    echo "  - Resolving merge conflicts..."
+    # For doomgeneric_linuxvt.c, keep theirs (multiplayer version has the exports)
+    cd "$BUILD_DIR/doomgeneric"
+    for f in doomgeneric/*.c doomgeneric/*.h; do
+        if grep -q "<<<<<<" "$f" 2>/dev/null; then
+            sed -i '/<<<<<<< ours/,/=======/d' "$f"
+            sed -i '/>>>>>>> theirs/d' "$f"
+        fi
+    done
+    cd - > /dev/null
+}
 
 export OPENWRT_SDK="$BUILD_DIR/openwrt-sdk"
 make -C "$BUILD_DIR/doomgeneric/doomgeneric" -f Makefile.mipsel clean

@@ -1,90 +1,457 @@
-From fbcd2d2486865aee02157f3ed1c8db7c24c3ddf4 Mon Sep 17 00:00:00 2001
-From: Luke Macken <luke@farmgpu.com>
-Date: Wed, 7 Jan 2026 09:15:31 -0700
-Subject: [PATCH 2/2] Multiplayer deathmatch support
-
-- POSIX socket-based net_module_t implementation (net_socket.c)
-- Chocolate Doom 3.1.x protocol compatibility (net_client.c)
-- Lobby UI with player names and IPs (net_lobby.c)
-- Controller can start game from lobby (Green button)
-- Reliable packet handling for LAUNCH and GAMESTART
-- GAMEDATA send/receive with ticcmd diffs and baseline tracking
-- Keepalive packets to prevent server timeouts
-- Receive window for in-order tic processing
-- Random seed synchronization from GAMESTART
-- Command-line args: -connect, -warp, -nomonsters, -timer, -skill
-- Configurable via payload DuckyScript interface
-
-Copyright (C) 2026
----
- doomgeneric/Makefile.mipsel       |    5 +
- doomgeneric/doomgeneric_linuxvt.c |   37 +-
- doomgeneric/dummy.c               |    2 -
- doomgeneric/m_menu.c              |    6 +-
- doomgeneric/net_client.c          | 1058 +++++++++++++++++++++++++++++
- doomgeneric/net_dedicated.c       |   19 +
- doomgeneric/net_io.c              |  112 +++
- doomgeneric/net_lobby.c           |  335 +++++++++
- doomgeneric/net_loop.c            |  192 ++++++
- doomgeneric/net_packet.c          |  203 ++++++
- doomgeneric/net_query.c           |   29 +
- doomgeneric/net_server.c          |   54 ++
- doomgeneric/net_socket.c          |  298 ++++++++
- doomgeneric/net_socket.h          |   19 +
- 14 files changed, 2359 insertions(+), 10 deletions(-)
- create mode 100644 doomgeneric/net_client.c
- create mode 100644 doomgeneric/net_dedicated.c
- create mode 100644 doomgeneric/net_io.c
- create mode 100644 doomgeneric/net_lobby.c
- create mode 100644 doomgeneric/net_loop.c
- create mode 100644 doomgeneric/net_packet.c
- create mode 100644 doomgeneric/net_query.c
- create mode 100644 doomgeneric/net_server.c
- create mode 100644 doomgeneric/net_socket.c
- create mode 100644 doomgeneric/net_socket.h
-
 diff --git a/doomgeneric/Makefile.mipsel b/doomgeneric/Makefile.mipsel
-index 49f4364..cc6047f 100644
---- a/doomgeneric/Makefile.mipsel
+new file mode 100644
+index 0000000..123448a
+--- /dev/null
 +++ b/doomgeneric/Makefile.mipsel
-@@ -44,6 +44,11 @@ OUTPUT=doomgeneric
- SRC_DOOM = dummy.o am_map.o doomdef.o doomstat.o dstrings.o d_event.o d_items.o d_iwad.o d_loop.o d_main.o d_mode.o d_net.o f_finale.o f_wipe.o g_game.o hu_lib.o hu_stuff.o info.o i_cdmus.o i_endoom.o i_joystick.o i_scale.o i_sound.o i_system.o i_timer.o memio.o m_argv.o m_bbox.o m_cheat.o m_config.o m_controls.o m_fixed.o m_menu.o m_misc.o m_random.o p_ceilng.o p_doors.o p_enemy.o p_floor.o p_inter.o p_lights.o p_map.o p_maputl.o p_mobj.o p_plats.o p_pspr.o p_saveg.o p_setup.o p_sight.o p_spec.o p_switch.o p_telept.o p_tick.o p_user.o r_bsp.o r_data.o r_draw.o r_main.o r_plane.o r_segs.o r_sky.o r_things.o sha1.o sounds.o statdump.o st_lib.o st_stuff.o s_sound.o tables.o v_video.o wi_stuff.o w_checksum.o w_file.o w_main.o w_wad.o z_zone.o w_file_stdc.o i_input.o i_video.o doomgeneric.o doomgeneric_linuxvt.o mus2mid.o
- OBJS += $(addprefix $(OBJDIR)/, $(SRC_DOOM))
- 
+@@ -0,0 +1,78 @@
++################################################################
++#
++# Cross-compilation Makefile for MIPS (mipsel-linux-gnu)
++# For WiFi Pineapple Pager
++#
++
++ifeq ($(V),1)
++	VB=''
++else
++	VB=@
++endif
++
++# OpenWrt SDK musl-based cross-compiler for mipsel_24kc
++# Using QEMU wrapper to run x86-64 SDK on ARM64 host
++CC=$(shell pwd)/qemu-gcc-wrapper.sh
++CROSS_COMPILE=$(shell pwd)/qemu-gcc-wrapper.sh
++# Keep Doom at 320x200 internally, we scale in output code
++CFLAGS+=-DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200
++# Widen FOV to compensate for aspect ratio stretch (480/320)/(222/200) = 1.35x
++# Original FOV is 2048, adjusted: 2048 * 1.35 = 2765
++CFLAGS+=-DFIELDOFVIEW=2765
++# Optimize for speed
++# -O3: Maximum speed optimization
++# -march=24kec: Target MIPS 24KEc CPU with DSP extensions
++# -mdsp: Enable MIPS DSP ASE instructions
++# -funroll-loops: Unroll loops for speed
++# -ffast-math: Faster floating point
++# -fomit-frame-pointer: Free up a register
++# -fprefetch-loop-arrays: Generate prefetch instructions for arrays (CPU supports it!)
++# -ftree-loop-vectorize: Enable loop vectorization
++# -finline-functions: Inline small functions for speed
++# -mbranch-likely: Use branch likely instructions for better branch prediction
++CFLAGS+=-O3 -Wall -DNORMALUNIX -DLINUX -D_DEFAULT_SOURCE
++CFLAGS+=-march=24kec -mtune=24kec -mdsp -mbranch-likely
++CFLAGS+=-ffast-math -funroll-loops -fomit-frame-pointer
++CFLAGS+=-fprefetch-loop-arrays -finline-functions
++LDFLAGS+=-static
++LIBS+=-lm -lc
++
++# subdirectory for objects
++OBJDIR=build
++OUTPUT=doomgeneric
++
++SRC_DOOM = dummy.o am_map.o doomdef.o doomstat.o dstrings.o d_event.o d_items.o d_iwad.o d_loop.o d_main.o d_mode.o d_net.o f_finale.o f_wipe.o g_game.o hu_lib.o hu_stuff.o info.o i_cdmus.o i_endoom.o i_joystick.o i_scale.o i_sound.o i_system.o i_timer.o memio.o m_argv.o m_bbox.o m_cheat.o m_config.o m_controls.o m_fixed.o m_menu.o m_misc.o m_random.o p_ceilng.o p_doors.o p_enemy.o p_floor.o p_inter.o p_lights.o p_map.o p_maputl.o p_mobj.o p_plats.o p_pspr.o p_saveg.o p_setup.o p_sight.o p_spec.o p_switch.o p_telept.o p_tick.o p_user.o r_bsp.o r_data.o r_draw.o r_main.o r_plane.o r_segs.o r_sky.o r_things.o sha1.o sounds.o statdump.o st_lib.o st_stuff.o s_sound.o tables.o v_video.o wi_stuff.o w_checksum.o w_file.o w_main.o w_wad.o z_zone.o w_file_stdc.o i_input.o i_video.o doomgeneric.o doomgeneric_linuxvt.o mus2mid.o
++
 +# Network sources for multiplayer support
 +SRC_NET = net_packet.o net_io.o net_socket.o net_client.o net_server.o net_loop.o net_query.o net_dedicated.o net_lobby.o
 +
++OBJS += $(addprefix $(OBJDIR)/, $(SRC_DOOM))
 +OBJS += $(addprefix $(OBJDIR)/, $(SRC_NET))
 +
- all:	 $(OUTPUT)
++all:	 $(OUTPUT)
++
++clean:
++	rm -rf $(OBJDIR)
++	rm -f $(OUTPUT)
++	rm -f $(OUTPUT).gdb
++	rm -f $(OUTPUT).map
++
++$(OUTPUT):	$(OBJS)
++	@echo [Linking $@]
++	$(VB)$(CC) $(CFLAGS) $(LDFLAGS) $(OBJS) \
++	-o $(OUTPUT) $(LIBS)
++	@echo [Size]
++	-@size $(OUTPUT) 2>/dev/null || true
++
++$(OBJS): | $(OBJDIR)
++
++$(OBJDIR):
++	mkdir -p $(OBJDIR)
++
++$(OBJDIR)/%.o:	%.c
++	@echo [Compiling $<]
++	$(VB)$(CC) $(CFLAGS) -c $< -o $@
++
++print:
++	@echo OBJS: $(OBJS)
++
+diff --git a/doomgeneric/d_loop.c b/doomgeneric/d_loop.c
+index 1939dbd..1fe1c58 100644
+--- a/doomgeneric/d_loop.c
++++ b/doomgeneric/d_loop.c
+@@ -37,9 +37,13 @@
+ #include "net_io.h"
+ #include "net_query.h"
+ #include "net_server.h"
+-#include "net_sdl.h"
++#include "net_socket.h"  // Use POSIX sockets instead of SDL_net
+ #include "net_loop.h"
  
- clean:
++// External declarations for network settings received from server
++extern net_gamesettings_t received_settings;
++extern boolean received_settings_valid;
++
+ // The complete set of data for a particular tic.
+ 
+ typedef struct
+@@ -437,15 +441,99 @@ void D_StartNetGame(net_gamesettings_t *settings,
+     //    printf("Syncing netgames like Vanilla Doom.\n");
+     //}
+ #else
+-    settings->consoleplayer = 0;
+-	settings->num_players = 1;
+-	settings->player_classes[0] = player_class;
+-	settings->new_sync = 0;
+-	settings->extratics = 1;
+-	settings->ticdup = 1;
+-
+-	ticdup = settings->ticdup;
+-	new_sync = settings->new_sync;
++#ifdef FEATURE_MULTIPLAYER
++    // If we're connected to a network game, send GAMESTART and wait for response
++    if (net_client_connected)
++    {
++        // Use command-line values (from d_main.c) for game settings
++        extern int startepisode;
++        extern int startmap;
++        extern int startskill;
++        extern int nomonsters;
++        extern int fastparm;
++        extern int respawnparm;
++        extern int timelimit;
++        
++        // Fill in settings to send to server
++        settings->ticdup = 1;
++        settings->extratics = 1;
++        settings->deathmatch = 1;  // Deathmatch mode
++        settings->episode = startepisode;
++        settings->map = startmap;
++        settings->skill = startskill;
++        settings->nomonsters = nomonsters;
++        settings->fast_monsters = fastparm;
++        settings->respawn_monsters = respawnparm;
++        settings->timelimit = timelimit;
++        settings->loadgame = -1;
++        settings->lowres_turn = 0;
++        settings->new_sync = 0;
++        settings->gameversion = 0;
++        settings->player_classes[0] = player_class;
++        
++        // Send GAMESTART and wait for server's response
++        extern void NET_CL_SendStartAndWait(net_gamesettings_t *settings);
++        NET_CL_SendStartAndWait(settings);
++        
++        // Now use the received settings from server
++        if (received_settings_valid)
++        {
++            // Copy all settings from what the server sent us
++            settings->consoleplayer = received_settings.consoleplayer;
++            settings->num_players = received_settings.num_players;
++            settings->deathmatch = received_settings.deathmatch;
++            settings->episode = received_settings.episode;
++            settings->map = received_settings.map;
++            settings->skill = received_settings.skill;
++            settings->nomonsters = received_settings.nomonsters;
++            settings->fast_monsters = received_settings.fast_monsters;
++            settings->respawn_monsters = received_settings.respawn_monsters;
++            settings->timelimit = received_settings.timelimit;
++            settings->loadgame = received_settings.loadgame;
++            settings->lowres_turn = received_settings.lowres_turn;
++            settings->new_sync = received_settings.new_sync;
++            settings->extratics = received_settings.extratics;
++            settings->ticdup = received_settings.ticdup;
++            
++            for (int i = 0; i < NET_MAXPLAYERS; i++)
++                settings->player_classes[i] = received_settings.player_classes[i];
++            
++            printf("D_StartNetGame: Using network settings - player %d of %d\n",
++                   settings->consoleplayer + 1, settings->num_players);
++            
++            // CRITICAL: Set localplayer so we control our own character!
++            localplayer = settings->consoleplayer;
++            
++            // Set playeringame for all players
++            for (int i = 0; i < NET_MAXPLAYERS; i++)
++                local_playeringame[i] = i < settings->num_players;
++        }
++        else
++        {
++            printf("D_StartNetGame: ERROR - no valid settings from server!\n");
++            // Fall through to single player defaults
++            settings->consoleplayer = 0;
++            settings->num_players = 1;
++            localplayer = 0;
++            local_playeringame[0] = true;
++        }
++    }
++    else
++#endif
++    {
++        // Single player defaults
++        settings->consoleplayer = 0;
++        settings->num_players = 1;
++        settings->player_classes[0] = player_class;
++        settings->new_sync = 0;
++        settings->extratics = 1;
++        settings->ticdup = 1;
++        localplayer = 0;
++        local_playeringame[0] = true;
++    }
++
++    ticdup = settings->ticdup;
++    new_sync = settings->new_sync;
+ #endif
+ }
+ 
+@@ -476,7 +564,7 @@ boolean D_InitNetGame(net_connect_data_t *connect_data)
+     {
+         NET_SV_Init();
+         NET_SV_AddModule(&net_loop_server_module);
+-        NET_SV_AddModule(&net_sdl_module);
++        NET_SV_AddModule(&net_socket_module);
+         NET_SV_RegisterWithMaster();
+ 
+         net_loop_client_module.InitClient();
+@@ -515,8 +603,8 @@ boolean D_InitNetGame(net_connect_data_t *connect_data)
+ 
+         if (i > 0)
+         {
+-            net_sdl_module.InitClient();
+-            addr = net_sdl_module.ResolveAddress(myargv[i+1]);
++            net_socket_module.InitClient();
++            addr = net_socket_module.ResolveAddress(myargv[i+1]);
+ 
+             if (addr == NULL)
+             {
+diff --git a/doomgeneric/d_loop.h b/doomgeneric/d_loop.h
+index eb87d84..0506538 100644
+--- a/doomgeneric/d_loop.h
++++ b/doomgeneric/d_loop.h
+@@ -77,5 +77,14 @@ void D_StartNetGame(net_gamesettings_t *settings,
+ extern boolean singletics;
+ extern int gametic, ticdup;
+ 
++// Receive ticcmds from network
++void D_ReceiveTic(ticcmd_t *ticcmds, boolean *players_mask);
++
++// Wait for game launch signal
++void NET_WaitForLaunch(void);
++
++// LAN server discovery
++net_addr_t *NET_FindLANServer(void);
++
+ #endif
+ 
+diff --git a/doomgeneric/doomfeatures.h b/doomgeneric/doomfeatures.h
+index dff6936..724210e 100644
+--- a/doomgeneric/doomfeatures.h
++++ b/doomgeneric/doomfeatures.h
+@@ -29,7 +29,7 @@
+ 
+ // Enables multiplayer support (network games)
+ 
+-#undef FEATURE_MULTIPLAYER
++#define FEATURE_MULTIPLAYER
+ 
+ // Enables sound output
+ 
 diff --git a/doomgeneric/doomgeneric_linuxvt.c b/doomgeneric/doomgeneric_linuxvt.c
-index f3e25d9..e4f1013 100644
+index ed94dd9..b004b41 100644
 --- a/doomgeneric/doomgeneric_linuxvt.c
 +++ b/doomgeneric/doomgeneric_linuxvt.c
-@@ -80,11 +80,12 @@ static struct timeval startTime;
+@@ -6,6 +6,8 @@
+ #include "m_argv.h"
+ #include "doomgeneric.h"
+ #include "i_system.h"
++#include "doomdef.h"   // For GS_LEVEL constant
++#include "doomstat.h"  // For gamestate variable
+ 
+ // XXX: HACK
+ // Linux's input-event-codes.h and doomkeys.h have many collisions.
+@@ -46,6 +48,7 @@
+ 
+ 
+ #include <stdio.h>
++#include <stdlib.h>
+ #include <string.h>
+ #include <unistd.h>
+ #include <errno.h>
+@@ -58,6 +61,9 @@
+ #include <linux/input.h>
+ #include <linux/input-event-codes.h>
+ #include <linux/fb.h>
++#include <linux/kd.h>
++#include <linux/vt.h>
++#include <signal.h>
+ 
+ #include <stdbool.h>
+ 
+@@ -74,8 +80,45 @@ static struct timeval startTime;
  
  // framebuffer stuff 
  static uint8_t *fbPtr;
--static uint16_t *renderBuffer = NULL;  // Local render buffer for 16-bit mode
--static unsigned int renderBufferSize = 0;
 -static int fbFd;
+-static unsigned int fbWidth, fbHeight, fbStride, fbBytesPerPixel, fbOffsetX, fbOffsetY;
++// These are non-static so net_lobby.c can access them for lobby drawing
 +uint16_t *renderBuffer = NULL;  // Local render buffer for 16-bit mode
 +size_t renderBufferSize = 0;
 +int fbFd;
- static int ttyFd = -1;  // TTY for graphics mode switching
--static unsigned int fbWidth, fbHeight, fbStride, fbBytesPerPixel, fbOffsetX, fbOffsetY;
-+unsigned int fbWidth, fbHeight;  // Non-static for net_lobby.c
++static int ttyFd = -1;  // TTY for graphics mode switching
++unsigned int fbWidth, fbHeight;  // Non-static for net_lobby.c access
 +static unsigned int fbStride, fbBytesPerPixel, fbOffsetX, fbOffsetY;
- static int fbIs16Bit = 0; // 1 if framebuffer is 16-bit RGB565
++static int fbIs16Bit = 0; // 1 if framebuffer is 16-bit RGB565
++
++// Precomputed lookup tables for scaling (avoids per-pixel division)
++// Full-screen stretched (for gameplay with FOV correction)
++static unsigned int *srcXLookup = NULL;  // For each dest Y, source X
++static unsigned int *srcYLookup = NULL;  // For each dest X, source Y
++static unsigned int scaledOutW = 0;
++static unsigned int scaledOutH = 0;
++static unsigned int scaledOffY = 0;
++
++// Aspect-correct (for title screens/menus - uses black bars)
++static unsigned int *srcXLookupAspect = NULL;
++static unsigned int *srcYLookupAspect = NULL;
++static unsigned int aspectOutW = 0;
++static unsigned int aspectOutH = 0;
++static unsigned int aspectOffY = 0;  // Vertical offset for centering (in display rows)
++
++// Cleanup function for signal handling
++static void cleanup_and_exit(int sig) {
++	// Restore text mode if we switched to graphics mode
++	if (ttyFd >= 0) {
++		ioctl(ttyFd, KDSETMODE, KD_TEXT);
++		close(ttyFd);
++	}
++	if (renderBuffer) free(renderBuffer);
++	if (srcXLookup) free(srcXLookup);
++	if (srcYLookup) free(srcYLookup);
++	if (srcXLookupAspect) free(srcXLookupAspect);
++	if (srcYLookupAspect) free(srcYLookupAspect);
++	if (fbFd >= 0) close(fbFd);
++	_exit(sig ? 128 + sig : 0);
++}
  
- // Precomputed lookup tables for scaling (avoids per-pixel division)
-@@ -445,6 +446,34 @@ static void checkKeys() {
+ // input stuff
+ static int numInputFds = 0;
+@@ -87,6 +130,16 @@ static unsigned short s_KeyQueue[KEYQUEUE_SIZE];
+ static unsigned int s_KeyQueueWriteIndex = 0;
+ static unsigned int s_KeyQueueReadIndex = 0;
+ 
++// Track button states for combo detection
++static int redButtonPressed = 0;   // BTN_SOUTH (0x130)
++static int greenButtonPressed = 0; // BTN_EAST (0x131)
++
++// Track D-pad states for green+direction combos
++static int dpadUpPressed = 0;
++static int dpadDownPressed = 0;
++static int dpadLeftPressed = 0;
++static int dpadRightPressed = 0;
++
+ // XXX: HACK
+ // Linux's evdev system doesn't make it feasible to just use
+ // tolower(key) like the existing conversions did, so we
+@@ -197,6 +250,14 @@ static unsigned char convertToDoomKey(unsigned int key){
+ 			key = DOOM_KEY_TAB;
+ 			break;
+ 
++		// WiFi Pineapple Pager button mappings
++		case 0x130:  // BTN_SOUTH (304) - red button
++			key = KEY_FIRE;
++			break;
++		case 0x131:  // BTN_EAST (305) - green button
++			key = DOOM_KEY_ENTER;
++			break;
++
+ 		// sadly, yes, we need to handle every single alphanumeric
+ 		// key here, since evdev doesn't spit out keys in anything
+ 		// remotely resembling ASCII.....
+@@ -273,11 +334,73 @@ static unsigned char convertToDoomKey(unsigned int key){
+ 	return key;
  }
  
+-static void addKeyToQueue(int pressed, unsigned char keyCode) {
++static void addKeyToQueue(int pressed, unsigned int keyCode) {
+ 	if ((keyCode == KEY_LEFTSHIFT || keyCode == KEY_RIGHTSHIFT) &&
+ 		(pressed == 1 || pressed == 0))
+ 		shiftPressed = pressed;
  
-+
++	// Track button states for combo detection
++	if (keyCode == 0x130) {  // Red button
++		redButtonPressed = pressed;
++	} else if (keyCode == 0x131) {  // Green button
++		greenButtonPressed = pressed;
++	}
++	
++	// Track D-pad states
++	if (keyCode == KEY_UP) dpadUpPressed = pressed;
++	else if (keyCode == KEY_DOWN) dpadDownPressed = pressed;
++	else if (keyCode == KEY_LEFT) dpadLeftPressed = pressed;
++	else if (keyCode == KEY_RIGHT) dpadRightPressed = pressed;
++	
++	// Both buttons pressed together = ESC (main menu)
++	if (redButtonPressed && greenButtonPressed && pressed) {
++		unsigned short escData = (1 << 8) | KEY_ESCAPE;
++		s_KeyQueue[s_KeyQueueWriteIndex] = escData;
++		s_KeyQueueWriteIndex++;
++		s_KeyQueueWriteIndex %= KEYQUEUE_SIZE;
++		return;  // Don't also send the individual button
++	}
++	
++	// Green + D-pad combos (when green is held)
++	if (greenButtonPressed && pressed) {
++		unsigned char comboKey = 0;
++		
++		if (keyCode == KEY_UP) {
++			comboKey = KEY_USE;  // Open doors/switches (0xa2)
++		} else if (keyCode == KEY_DOWN) {
++			comboKey = DOOM_KEY_TAB;  // Automap toggle
++		} else if (keyCode == KEY_LEFT) {
++			comboKey = KEY_STRAFE_L;  // Strafe left (0xa0)
++		} else if (keyCode == KEY_RIGHT) {
++			comboKey = KEY_STRAFE_R;  // Strafe right (0xa1)
++		}
++		
++		if (comboKey != 0) {
++			unsigned short comboData = (1 << 8) | comboKey;
++			s_KeyQueue[s_KeyQueueWriteIndex] = comboData;
++			s_KeyQueueWriteIndex++;
++			s_KeyQueueWriteIndex %= KEYQUEUE_SIZE;
++			return;  // Don't send the regular D-pad key
++		}
++	}
++	
++	// Handle key release for combo keys (need to release the combo key too)
++	if (greenButtonPressed && !pressed) {
++		unsigned char comboKey = 0;
++		
++		if (keyCode == KEY_UP) comboKey = KEY_USE;
++		else if (keyCode == KEY_DOWN) comboKey = DOOM_KEY_TAB;
++		else if (keyCode == KEY_LEFT) comboKey = KEY_STRAFE_L;
++		else if (keyCode == KEY_RIGHT) comboKey = KEY_STRAFE_R;
++		
++		if (comboKey != 0) {
++			unsigned short comboData = (0 << 8) | comboKey;  // Release
++			s_KeyQueue[s_KeyQueueWriteIndex] = comboData;
++			s_KeyQueueWriteIndex++;
++			s_KeyQueueWriteIndex %= KEYQUEUE_SIZE;
++			return;
++		}
++	}
+ 		
+ 	unsigned char key = convertToDoomKey(keyCode);
+ 	if (key == 0xFF) // unknown, don't process it
+@@ -323,6 +446,32 @@ static void checkKeys() {
+ 	return;
+ }
+ 
 +// Check for lobby-specific input: returns 1=start, -1=quit, 0=nothing
 +// Pager buttons: 0x131 (305) = GREEN button, 0x130 (304) = RED button
 +int DG_CheckLobbyInput(void)
@@ -111,24 +478,305 @@ index f3e25d9..e4f1013 100644
 +	}
 +	return result;
 +}
-+
+ 
  #define TEST_KEY(k) (keybits[(k)/8] & (1 << ((k)%8)))
  static int isKeyboard(const char *devPath) {
- 	unsigned long evbits;
+@@ -353,10 +502,17 @@ static int isKeyboard(const char *devPath) {
+ 		return 0;
+ 	}
+ 
++	/* Accept full keyboards OR any device with button keys (for GPIO buttons) */
+ 	if (TEST_KEY(KEY_A) && TEST_KEY(KEY_ENTER)) {
+ 		close(fd);
+ 		return 1;  /* looks like a keyboard */
+ 	}
++	
++	/* Also accept devices with BTN_SOUTH/BTN_EAST (Pineapple Pager buttons) */
++	if (TEST_KEY(0x130) || TEST_KEY(0x131)) {
++		close(fd);
++		return 1;  /* has GPIO buttons */
++	}
+ 
+ 	close(fd);
+ 	return 0;
+@@ -409,6 +565,30 @@ void DG_Init() {
+ 	struct fb_var_screeninfo info;
+ 	struct fb_fix_screeninfo finfo;
+ 
++	// Set up signal handlers for clean exit
++	signal(SIGINT, cleanup_and_exit);
++	signal(SIGTERM, cleanup_and_exit);
++	signal(SIGSEGV, cleanup_and_exit);
++
++	//
++	// Try to get exclusive graphics mode access
++	// This prevents the console/other apps from interfering
++	//
++	ttyFd = open("/dev/tty0", O_RDWR);
++	if (ttyFd < 0)
++		ttyFd = open("/dev/tty", O_RDWR);
++	if (ttyFd < 0)
++		ttyFd = open("/dev/console", O_RDWR);
++	
++	if (ttyFd >= 0) {
++		// Switch to graphics mode - prevents console from drawing
++		if (ioctl(ttyFd, KDSETMODE, KD_GRAPHICS) == 0) {
++			printf("Switched to graphics mode\n");
++		} else {
++			printf("Warning: Could not switch to graphics mode\n");
++		}
++	}
++
+ 	//
+ 	// set up the framebuffer
+ 	//
+@@ -434,19 +614,96 @@ void DG_Init() {
+ 	fbWidth = info.xres;
+ 	fbHeight = info.yres;
+ 	fbBytesPerPixel = info.bits_per_pixel / 8;
++	
++	// Detect 16-bit RGB565 framebuffer
++	if (info.bits_per_pixel == 16) {
++		fbIs16Bit = 1;
++		printf("Framebuffer: %dx%d, 16-bit RGB565\n", fbWidth, fbHeight);
++		
++		// Use write() for SPI displays - mmap causes glitches with fbtft
++		renderBufferSize = fbWidth * fbHeight * sizeof(uint16_t);
++		renderBuffer = (uint16_t *)malloc(renderBufferSize);
++		if (!renderBuffer)
++			I_Error("Failed to allocate render buffer");
++		memset(renderBuffer, 0, renderBufferSize);
++		
++		// Clear the display
++		lseek(fbFd, 0, SEEK_SET);
++		write(fbFd, renderBuffer, renderBufferSize);
++		
++		fbPtr = NULL;
++		fbOffsetX = 0;
++		fbOffsetY = 0;
++		
++		// Fill entire 222x480 display with 320x200 Doom + 90° CCW rotation
++		// After rotation: Doom width (320) -> display height (480), Doom height (200) -> display width (222)
++		// Scale factors: 480/320 = 1.5 for height, 222/200 = 1.11 for width
++		scaledOutW = fbWidth;   // 222 (fills display width)
++		scaledOutH = fbHeight;  // 480 (fills display height)
++		scaledOffY = 0;  // No offset, fills entire screen
++		
++		// Precompute lookup tables for STRETCHED scaling + rotation (gameplay)
++		srcXLookup = (unsigned int *)malloc(scaledOutH * sizeof(unsigned int));
++		srcYLookup = (unsigned int *)malloc(scaledOutW * sizeof(unsigned int));
++		
++		// For each display row (y), compute which Doom column (X) to sample
++		// Display Y maps to Doom X: srcX = y * DoomWidth / displayHeight
++		for (unsigned int y = 0; y < scaledOutH; y++) {
++			srcXLookup[y] = (y * DOOMGENERIC_RESX) / scaledOutH;
++			if (srcXLookup[y] >= DOOMGENERIC_RESX) srcXLookup[y] = DOOMGENERIC_RESX - 1;
++		}
++		// For each display col (x), compute which Doom row (Y) to sample (flipped for CCW)
++		// Display X maps to Doom Y (inverted): srcY = (width-1-x) * DoomHeight / displayWidth
++		for (unsigned int x = 0; x < scaledOutW; x++) {
++			srcYLookup[x] = ((scaledOutW - 1 - x) * DOOMGENERIC_RESY) / scaledOutW;
++			if (srcYLookup[x] >= DOOMGENERIC_RESY) srcYLookup[x] = DOOMGENERIC_RESY - 1;
++		}
++		
++		printf("Full-screen: Doom %dx%d -> Display %dx%d (scaled + rotated)\n", 
++		       DOOMGENERIC_RESX, DOOMGENERIC_RESY, fbWidth, fbHeight);
++		
++		// Precompute lookup tables for ASPECT-CORRECT scaling (title screens)
++		// Display: 222 wide x 480 tall. After 90° CCW rotation from Doom's POV: 480 wide x 222 tall
++		// Doom is 320x200 (1.6:1 aspect). To maintain aspect with 222 vertical pixels:
++		// Scaled width = 222 * (320/200) = 222 * 1.6 = 355 display rows
++		// Black bars: (480 - 355) / 2 = 62 pixels on each side
++		aspectOutW = fbWidth;  // 222 - use full display columns (becomes Doom's vertical)
++		aspectOutH = (aspectOutW * DOOMGENERIC_RESX) / DOOMGENERIC_RESY;  // 222 * 320 / 200 = 355
++		if (aspectOutH > fbHeight) aspectOutH = fbHeight;
++		aspectOffY = (fbHeight - aspectOutH) / 2;  // Center vertically: (480 - 355) / 2 = 62
++		
++		srcXLookupAspect = (unsigned int *)malloc(aspectOutH * sizeof(unsigned int));
++		srcYLookupAspect = (unsigned int *)malloc(aspectOutW * sizeof(unsigned int));
++		
++		// For each output row in the aspect-correct region, which Doom X to sample
++		for (unsigned int y = 0; y < aspectOutH; y++) {
++			srcXLookupAspect[y] = (y * DOOMGENERIC_RESX) / aspectOutH;
++			if (srcXLookupAspect[y] >= DOOMGENERIC_RESX) srcXLookupAspect[y] = DOOMGENERIC_RESX - 1;
++		}
++		// For each output column, which Doom Y to sample (inverted for CCW rotation)
++		for (unsigned int x = 0; x < aspectOutW; x++) {
++			srcYLookupAspect[x] = ((aspectOutW - 1 - x) * DOOMGENERIC_RESY) / aspectOutW;
++			if (srcYLookupAspect[x] >= DOOMGENERIC_RESY) srcYLookupAspect[x] = DOOMGENERIC_RESY - 1;
++		}
++		
++		printf("Aspect-correct: Doom %dx%d -> %dx%d rows + %d row offset (for menus)\n",
++		       DOOMGENERIC_RESX, DOOMGENERIC_RESY, aspectOutW, aspectOutH, aspectOffY);
++	} else {
++		printf("Framebuffer: %dx%d, %d-bit\n", fbWidth, fbHeight, info.bits_per_pixel);
++		
++		// For 32-bit displays, use mmap as normal
++		fbOffsetX = ((fbWidth - DOOMGENERIC_RESX) / 2) * fbBytesPerPixel;
++		fbOffsetY = ((fbHeight - DOOMGENERIC_RESY) / 2) * fbStride;
+ 
+-	// to center the image on screen
+-	fbOffsetX = ((fbWidth - DOOMGENERIC_RESX) / 2) * fbBytesPerPixel;
+-	fbOffsetY = ((fbHeight - DOOMGENERIC_RESY) / 2) * fbStride;
+-
+-	fbPtr = mmap(NULL, fbStride * fbHeight, PROT_READ | PROT_WRITE,
+-			MAP_SHARED, fbFd, 0);
++		fbPtr = mmap(NULL, fbStride * fbHeight, PROT_READ | PROT_WRITE,
++				MAP_SHARED, fbFd, 0);
+ 
+-	if (!fbPtr)
+-		I_Error("Failed to mmap /dev/fb0: %s", strerror(errno));
++		if (!fbPtr)
++			I_Error("Failed to mmap /dev/fb0: %s", strerror(errno));
+ 
+-	// clear the screen
+-	memset(fbPtr, 0, fbStride * fbHeight);
++		// clear the screen
++		memset(fbPtr, 0, fbStride * fbHeight);
++	}
+ 
+ 	//
+ 	// set up input
+@@ -460,16 +717,91 @@ void DG_Init() {
+ 	gettimeofday(&startTime, NULL);
+ }
+ 
++// Convert 32-bit ARGB to 16-bit RGB565
++static inline uint16_t rgb32_to_rgb565(uint32_t pixel) {
++	uint8_t r = (pixel >> 16) & 0xFF;
++	uint8_t g = (pixel >> 8) & 0xFF;
++	uint8_t b = pixel & 0xFF;
++	return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
++}
++
++// Inline RGB8888 to RGB565 conversion
++#define RGB888_TO_RGB565(p) (((p >> 8) & 0xF800) | ((p >> 5) & 0x07E0) | ((p >> 3) & 0x001F))
++
+ void DG_DrawFrame() {
+-	// we need to do it line-by-line like this to account for the
+-	// fact that the system framebuffer resolution is very likely
+-	// larger than the doomgeneric render resolution.
+-	for (int line = 0; line < DOOMGENERIC_RESY; line++) {
+-		memcpy(
+-			(void *)((uintptr_t)(fbPtr) + (fbStride * line) + fbOffsetY + fbOffsetX),
++	if (fbIs16Bit) {
++		// Optimized 16-bit RGB565 with 90° CCW rotation
++		// Uses precomputed lookup tables to avoid per-pixel division
++		uint32_t *srcBuf = (uint32_t *)DG_ScreenBuffer;
++		
++		// Use aspect-correct rendering for title/menu screens, stretched for gameplay
++		int useAspectCorrect = (gamestate != GS_LEVEL);
++		
++		if (useAspectCorrect && srcXLookupAspect && srcYLookupAspect) {
++			// Clear buffer first (for black bars at top/bottom)
++			memset(renderBuffer, 0, renderBufferSize);
++			
++			// Render with correct aspect ratio (centered with vertical black bars)
++			for (unsigned int y = 0; y < aspectOutH; y++) {
++				uint16_t *dst = renderBuffer + (y + aspectOffY) * fbWidth;
++				uint32_t *srcRow = srcBuf + srcXLookupAspect[y];
++				
++				// Process 4 pixels at a time when possible
++				unsigned int x = 0;
++				for (; x + 3 < aspectOutW; x += 4) {
++					uint32_t p0 = srcRow[srcYLookupAspect[x] * DOOMGENERIC_RESX];
++					uint32_t p1 = srcRow[srcYLookupAspect[x+1] * DOOMGENERIC_RESX];
++					uint32_t p2 = srcRow[srcYLookupAspect[x+2] * DOOMGENERIC_RESX];
++					uint32_t p3 = srcRow[srcYLookupAspect[x+3] * DOOMGENERIC_RESX];
++					dst[x]   = RGB888_TO_RGB565(p0);
++					dst[x+1] = RGB888_TO_RGB565(p1);
++					dst[x+2] = RGB888_TO_RGB565(p2);
++					dst[x+3] = RGB888_TO_RGB565(p3);
++				}
++				// Handle remaining pixels
++				for (; x < aspectOutW; x++) {
++					uint32_t pixel = srcRow[srcYLookupAspect[x] * DOOMGENERIC_RESX];
++					dst[x] = RGB888_TO_RGB565(pixel);
++				}
++			}
++		} else {
++			// Full-screen stretched rendering (gameplay with FOV correction)
++			for (unsigned int y = 0; y < scaledOutH; y++) {
++				uint16_t *dst = renderBuffer + (y + scaledOffY) * fbWidth;
++				uint32_t *srcRow = srcBuf + srcXLookup[y];
++				
++				// Process 4 pixels at a time when possible
++				unsigned int x = 0;
++				for (; x + 3 < scaledOutW; x += 4) {
++					uint32_t p0 = srcRow[srcYLookup[x] * DOOMGENERIC_RESX];
++					uint32_t p1 = srcRow[srcYLookup[x+1] * DOOMGENERIC_RESX];
++					uint32_t p2 = srcRow[srcYLookup[x+2] * DOOMGENERIC_RESX];
++					uint32_t p3 = srcRow[srcYLookup[x+3] * DOOMGENERIC_RESX];
++					dst[x]   = RGB888_TO_RGB565(p0);
++					dst[x+1] = RGB888_TO_RGB565(p1);
++					dst[x+2] = RGB888_TO_RGB565(p2);
++					dst[x+3] = RGB888_TO_RGB565(p3);
++				}
++				// Handle remaining pixels
++				for (; x < scaledOutW; x++) {
++					uint32_t pixel = srcRow[srcYLookup[x] * DOOMGENERIC_RESX];
++					dst[x] = RGB888_TO_RGB565(pixel);
++				}
++			}
++		}
++		
++		// Write frame to display
++		lseek(fbFd, 0, SEEK_SET);
++		write(fbFd, renderBuffer, renderBufferSize);
++	} else {
++		// Original 32-bit mmap path
++		for (int line = 0; line < DOOMGENERIC_RESY; line++) {
++			memcpy(
++				(void *)((uintptr_t)(fbPtr) + (fbStride * line) + fbOffsetY + fbOffsetX),
+ 				(void *)(((uintptr_t)DG_ScreenBuffer) + (DOOMGENERIC_RESX * line * fbBytesPerPixel)),
+-			 (fbBytesPerPixel * DOOMGENERIC_RESX)
+-		);
++				(fbBytesPerPixel * DOOMGENERIC_RESX)
++			);
++		}
+ 	}
+ 
+ 	checkKeys();
 diff --git a/doomgeneric/dummy.c b/doomgeneric/dummy.c
-index d78816b..559cd4d 100644
+index d78816b..0efdd9b 100644
 --- a/doomgeneric/dummy.c
 +++ b/doomgeneric/dummy.c
-@@ -24,9 +24,7 @@
+@@ -11,6 +11,7 @@
+  *---------------------------------------------------------------------*/
+ 
+ #include "doomtype.h"
++#include "doomfeatures.h"
+ 
+ /*---------------------------------------------------------------------*
+  *  local definitions                                                  *
+@@ -24,9 +25,11 @@
   *  public data                                                        *
   *---------------------------------------------------------------------*/
  
--boolean net_client_connected = false;
- 
--boolean drone = false;
++// net_client_connected and drone now defined in net_client.c when FEATURE_MULTIPLAYER is enabled
++#ifndef FEATURE_MULTIPLAYER
+ boolean net_client_connected = false;
+-
+ boolean drone = false;
++#endif
  
  /*---------------------------------------------------------------------*
   *  private data                                                       *
+diff --git a/doomgeneric/g_game.c b/doomgeneric/g_game.c
+index 9954d78..20eca54 100644
+--- a/doomgeneric/g_game.c
++++ b/doomgeneric/g_game.c
+@@ -948,8 +948,8 @@ void G_Ticker (void)
+ 		if (gametic > BACKUPTICS 
+ 		    && consistancy[i][buf] != cmd->consistancy) 
+ 		{ 
+-		    I_Error ("consistency failure (%i should be %i)",
+-			     cmd->consistancy, consistancy[i][buf]); 
++		    I_Error ("consistency failure for player %i (%i should be %i)",
++			     i, cmd->consistancy, consistancy[i][buf]); 
+ 		} 
+ 		if (players[i].mo) 
+ 		    consistancy[i][buf] = players[i].mo->x; 
 diff --git a/doomgeneric/m_menu.c b/doomgeneric/m_menu.c
 index 6df9655..4feb72c 100644
 --- a/doomgeneric/m_menu.c
@@ -148,10 +796,10 @@ index 6df9655..4feb72c 100644
  
 diff --git a/doomgeneric/net_client.c b/doomgeneric/net_client.c
 new file mode 100644
-index 0000000..964eedc
+index 0000000..c8025c3
 --- /dev/null
 +++ b/doomgeneric/net_client.c
-@@ -0,0 +1,1058 @@
+@@ -0,0 +1,1052 @@
 +//
 +// Copyright(C) 2005-2014 Simon Howard
 +// Copyright(C) 2026 WiFi Pineapple Pager port
@@ -1151,15 +1799,9 @@ index 0000000..964eedc
 +            }
 +            lobby_update_timer--;
 +            
-+            // Check for input
++            // Check for input (Green button to start if controller)
 +            input = DG_CheckLobbyInput();
-+            if (input == -1) {
-+                // User pressed quit (Red button)
-+                fprintf(stderr, "NET_WaitForLaunch: User quit from lobby\n");
-+                net_client_connected = false;
-+                return;
-+            }
-+            else if (input == 1 && net_client_wait_data.is_controller) {
++            if (input == 1 && net_client_wait_data.is_controller) {
 +                // Controller pressed start (Green button)
 +                fprintf(stderr, "NET_WaitForLaunch: Controller starting game!\n");
 +                NET_CL_LaunchGame();
@@ -1235,6 +1877,21 @@ index 0000000..e66911b
 +
 +
 +
+diff --git a/doomgeneric/net_defs.h b/doomgeneric/net_defs.h
+index bedfb95..f1ab16e 100644
+--- a/doomgeneric/net_defs.h
++++ b/doomgeneric/net_defs.h
+@@ -100,7 +100,9 @@ struct _net_addr_s
+ 
+ // magic number sent when connecting to check this is a valid client
+ 
+-#define NET_MAGIC_NUMBER 3436803284U
++// Magic number changed in Chocolate Doom 3.1.0
++#define NET_MAGIC_NUMBER     1454104972U
++#define NET_OLD_MAGIC_NUMBER 3436803284U
+ 
+ // header field value indicating that the packet is a reliable packet
+ 
 diff --git a/doomgeneric/net_io.c b/doomgeneric/net_io.c
 new file mode 100644
 index 0000000..f531025
@@ -1355,10 +2012,10 @@ index 0000000..f531025
 +
 diff --git a/doomgeneric/net_lobby.c b/doomgeneric/net_lobby.c
 new file mode 100644
-index 0000000..832f4cd
+index 0000000..a5f6c27
 --- /dev/null
 +++ b/doomgeneric/net_lobby.c
-@@ -0,0 +1,335 @@
+@@ -0,0 +1,332 @@
 +//
 +// Copyright(C) 2026 WiFi Pineapple Pager port
 +//
@@ -1676,16 +2333,13 @@ index 0000000..832f4cd
 +    }
 +    
 +    // Instructions at bottom
-+    y = LOBBY_HEIGHT - 50;
++    y = LOBBY_HEIGHT - 40;
 +    
 +    if (is_controller) {
 +        lobby_draw_centered(y, "GREEN = START GAME", RGB565_GREEN);
-+        y += 14;
 +    } else {
 +        lobby_draw_centered(y, "Waiting for host...", RGB565_YELLOW);
-+        y += 14;
 +    }
-+    lobby_draw_centered(y, "RED = QUIT", RGB565_RED);
 +    
 +    // Flush to screen
 +    lobby_flush();
@@ -2136,6 +2790,60 @@ index 0000000..8c85204
 +
 +
 +
+diff --git a/doomgeneric/net_query.h b/doomgeneric/net_query.h
+index 563a055..1624d63 100644
+--- a/doomgeneric/net_query.h
++++ b/doomgeneric/net_query.h
+@@ -1,44 +1,15 @@
+ //
+ // Copyright(C) 2005-2014 Simon Howard
++// Copyright(C) 2026 WiFi Pineapple Pager port
+ //
+-// This program is free software; you can redistribute it and/or
+-// modify it under the terms of the GNU General Public License
+-// as published by the Free Software Foundation; either version 2
+-// of the License, or (at your option) any later version.
+-//
+-// This program is distributed in the hope that it will be useful,
+-// but WITHOUT ANY WARRANTY; without even the implied warranty of
+-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+-// GNU General Public License for more details.
+-//
+-// DESCRIPTION:
+-//     Querying servers to find their current status.
++// Server query functions
+ //
+ 
+ #ifndef NET_QUERY_H
+ #define NET_QUERY_H
+ 
+-#include "net_defs.h"
+-
+-typedef void (*net_query_callback_t)(net_addr_t *addr,
+-                                     net_querydata_t *querydata,
+-                                     unsigned int ping_time,
+-                                     void *user_data);
+-
+-extern int NET_StartLANQuery(void);
+-extern int NET_StartMasterQuery(void);
+-
+-extern void NET_LANQuery(void);
+-extern void NET_MasterQuery(void);
+-extern void NET_QueryAddress(char *addr);
+-extern net_addr_t *NET_FindLANServer(void);
+-
+-extern int NET_Query_Poll(net_query_callback_t callback, void *user_data);
+-
+-extern net_addr_t *NET_Query_ResolveMaster(net_context_t *context);
+-extern void NET_Query_AddToMaster(net_addr_t *master_addr);
+-extern boolean NET_Query_CheckAddedToMaster(boolean *result);
+-extern void NET_Query_MasterResponse(net_packet_t *packet);
++void NET_QueryAddress(char *addr);
++void NET_LANQuery(void);
++void NET_MasterQuery(void);
+ 
+ #endif /* #ifndef NET_QUERY_H */
+-
 diff --git a/doomgeneric/net_server.c b/doomgeneric/net_server.c
 new file mode 100644
 index 0000000..4a23397
@@ -2525,6 +3233,3 @@ index 0000000..69979b1
 +
 +
 +
--- 
-2.48.1
-
