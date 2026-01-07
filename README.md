@@ -70,23 +70,6 @@ sha256sum -c SHA256SUMS
 
 External USB keyboards work alongside the Pager's built-in buttons. **Plug in your keyboard before launching the game** - input devices are detected at startup.
 
-With a keyboard you get full WASD/arrow key controls plus access to all standard DOOM features.
-
-## Cheat Codes
-
-Cheats work in single-player only (not deathmatch). Type these during gameplay:
-
-| Code | Effect |
-|------|--------|
-| `iddqd` | God Mode (invincibility) |
-| `idkfa` | All weapons, ammo, keys, armor |
-| `idfa` | All weapons, ammo, armor (no keys) |
-| `idclip` | No-clip (walk through walls) |
-| `idbehold` + `v/s/i/r/a/l` | Powerups |
-| `idclev##` | Warp to level (e.g., `idclev12`) |
-
-**Note:** Cheats require a USB keyboard - the Pager's 4 buttons can't type letter sequences.
-
 ## Technical Details
 
 - **CPU**: MIPS 24KEc @ 580MHz (soft-float)
@@ -158,10 +141,9 @@ chocolate-doom -iwad doom1.wad -connect 64.227.99.100:2342
 
 ## More Patch Ideas
 
-- Further rendering optimizations (especially the intro demo)
-- DOOM theme ringtone jingle at startup
+- Further rendering optimizations
 - Vibrate when hit
-- Command-line cheat flags (`-god`, `-noclip`) for Pager-only play
+- DOOM theme ringtone jingle at startup using the pager's piezoelectric buzzer
 
 ## License
 
