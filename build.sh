@@ -48,9 +48,12 @@ if [ "$DEPLOY_ONLY" = "1" ]; then
         exit 1
     fi
     ssh "$PAGER" "mkdir -p $DEST/doom $DEST/doom-deathmatch" 2>/dev/null || { echo "Cannot connect to $PAGER"; exit 1; }
+    # Single-player: full files
     scp "$RELEASE_DIR"/* "$PAGER:$DEST/doom/"
-    scp "$RELEASE_DIR_DM"/* "$PAGER:$DEST/doom-deathmatch/"
-    ssh "$PAGER" "chmod +x $DEST/doom/doomgeneric $DEST/doom/*.sh $DEST/doom-deathmatch/doomgeneric $DEST/doom-deathmatch/*.sh"
+    ssh "$PAGER" "chmod +x $DEST/doom/doomgeneric $DEST/doom/*.sh"
+    # Deathmatch: payload only, symlink binary and WAD
+    scp "$RELEASE_DIR_DM/payload.sh" "$RELEASE_DIR_DM/SHA256SUMS" "$PAGER:$DEST/doom-deathmatch/"
+    ssh "$PAGER" "cd $DEST/doom-deathmatch && rm -f doomgeneric doom1.wad && ln -s ../doom/doomgeneric . && ln -s ../doom/doom1.wad . && chmod +x *.sh"
     echo "Done! Synced to $PAGER:$DEST/"
     exit 0
 fi
@@ -152,14 +155,15 @@ if [ "$SKIP_RELEASE" = "0" ]; then
     chmod +x "$RELEASE_DIR/doomgeneric" "$RELEASE_DIR/payload.sh"
     (cd "$RELEASE_DIR" && sha256sum doomgeneric doom1.wad payload.sh > SHA256SUMS)
     
-    # Deathmatch: doom-deathmatch/
-    cp "$BINARY" "$RELEASE_DIR_DM/"
-    cp "$WAD" "$RELEASE_DIR_DM/"
+    # Deathmatch: doom-deathmatch/ (symlinks to ../doom/ to save space)
+    rm -f "$RELEASE_DIR_DM/doomgeneric" "$RELEASE_DIR_DM/doom1.wad"
+    ln -s ../doom/doomgeneric "$RELEASE_DIR_DM/doomgeneric"
+    ln -s ../doom/doom1.wad "$RELEASE_DIR_DM/doom1.wad"
     # Fix path in deathmatch payload (careful to only match full path)
     sed 's|/user/games/doom"|/user/games/doom-deathmatch"|g' \
         "$SCRIPT_DIR/payload-deathmatch.sh" > "$RELEASE_DIR_DM/payload.sh"
-    chmod +x "$RELEASE_DIR_DM/doomgeneric" "$RELEASE_DIR_DM/payload.sh"
-    (cd "$RELEASE_DIR_DM" && sha256sum doomgeneric doom1.wad payload.sh > SHA256SUMS)
+    chmod +x "$RELEASE_DIR_DM/payload.sh"
+    (cd "$RELEASE_DIR_DM" && sha256sum payload.sh > SHA256SUMS)
     
     echo ""
     echo "Release: $RELEASE_DIR"
@@ -177,9 +181,15 @@ if [ "$SKIP_DEPLOY" = "0" ]; then
     echo ""
     echo "[6/6] Deploying to $PAGER..."
     ssh "$PAGER" "mkdir -p $DEST/doom $DEST/doom-deathmatch" 2>/dev/null || { echo "Cannot connect to $PAGER (use --no-deploy to skip)"; exit 1; }
+    
+    # Deploy single-player (full files)
     scp "$RELEASE_DIR"/* "$PAGER:$DEST/doom/"
-    scp "$RELEASE_DIR_DM"/* "$PAGER:$DEST/doom-deathmatch/"
-    ssh "$PAGER" "chmod +x $DEST/doom/doomgeneric $DEST/doom/*.sh $DEST/doom-deathmatch/doomgeneric $DEST/doom-deathmatch/*.sh"
+    ssh "$PAGER" "chmod +x $DEST/doom/doomgeneric $DEST/doom/*.sh"
+    
+    # Deploy deathmatch (payload only, symlink to doom/ for binary and WAD)
+    scp "$RELEASE_DIR_DM/payload.sh" "$RELEASE_DIR_DM/SHA256SUMS" "$PAGER:$DEST/doom-deathmatch/"
+    ssh "$PAGER" "cd $DEST/doom-deathmatch && rm -f doomgeneric doom1.wad && ln -s ../doom/doomgeneric . && ln -s ../doom/doom1.wad . && chmod +x *.sh"
+    
     echo ""
     echo "========================================"
     echo "  Done! Find DOOM & DOOM Deathmatch"
@@ -191,5 +201,6 @@ else
     echo ""
     echo "To deploy manually:"
     echo "  scp $RELEASE_DIR/* $PAGER:$DEST/doom/"
-    echo "  scp $RELEASE_DIR_DM/* $PAGER:$DEST/doom-deathmatch/"
+    echo "  scp $RELEASE_DIR_DM/payload.sh $RELEASE_DIR_DM/SHA256SUMS $PAGER:$DEST/doom-deathmatch/"
+    echo "  ssh $PAGER \"cd $DEST/doom-deathmatch && ln -sf ../doom/doomgeneric . && ln -sf ../doom/doom1.wad .\""
 fi
