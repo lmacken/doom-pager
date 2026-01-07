@@ -125,6 +125,8 @@ Our `wifi-pineapple-pager.patch` adds:
 
 Connect to our public DOOM server for multiplayer deathmatch with other Pager and desktop players!
 
+![Custom Deathmatch Loby](deathmatch.png)
+
 Use `payload-deathmatch.sh` or run manually:
 
 ```bash
