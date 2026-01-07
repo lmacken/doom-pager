@@ -41,9 +41,6 @@ WAIT_FOR_INPUT >/dev/null 2>&1
 /etc/init.d/pineapplepager stop 2>/dev/null
 /etc/init.d/pineapd stop 2>/dev/null
 
-# Clear the framebuffer to black
-dd if=/dev/zero of=/dev/fb0 bs=61440 count=1 2>/dev/null
-
 # Small delay to let services fully stop
 sleep 1
 
