@@ -131,7 +131,7 @@ chocolate-doom -iwad doom1.wad -connect 64.227.99.100:2342
 ### Network Features
 - Chocolate Doom 3.1.x protocol compatibility
 - Works with vanilla Chocolate Doom server
-- POSIX socket-based network layer (no SDL dependency)
+- POSIX socket-based network layer
 - Full game state synchronization with consistency checks
 - Ticcmd diff compression for efficient bandwidth usage
 
