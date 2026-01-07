@@ -102,10 +102,9 @@ fi
 
 # 4. Apply patches & build
 echo "[4/6] Patching and building..."
-echo "  - Applying wifi-pineapple-pager.patch..."
-git -C "$BUILD_DIR/doomgeneric" apply "$SCRIPT_DIR/patches/wifi-pineapple-pager.patch"
-echo "  - Applying multiplayer.patch..."
-git -C "$BUILD_DIR/doomgeneric" apply "$SCRIPT_DIR/patches/multiplayer.patch"
+echo "  - Applying patches with git am..."
+git -C "$BUILD_DIR/doomgeneric" am "$SCRIPT_DIR/patches/0001-WiFi-Pineapple-Pager-support.patch"
+git -C "$BUILD_DIR/doomgeneric" am "$SCRIPT_DIR/patches/0002-Multiplayer-deathmatch-support.patch"
 
 export OPENWRT_SDK="$BUILD_DIR/openwrt-sdk"
 make -C "$BUILD_DIR/doomgeneric/doomgeneric" -f Makefile.mipsel clean

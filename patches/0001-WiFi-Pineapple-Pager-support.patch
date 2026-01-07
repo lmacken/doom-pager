@@ -1,3 +1,28 @@
+From f8ed0030f8df35afcd899a357d3668dbf266ff39 Mon Sep 17 00:00:00 2001
+From: Luke Macken <luke@farmgpu.com>
+Date: Wed, 7 Jan 2026 09:14:39 -0700
+Subject: [PATCH 1/2] WiFi Pineapple Pager support
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- MIPS cross-compilation with OpenWrt SDK (Makefile.mipsel)
+- QEMU wrapper for cross-compilation on non-MIPS hosts
+- 16-bit RGB565 framebuffer with 90° rotation for 222x480 display
+- Pager button mappings (D-pad, Red=Fire, Green=Enter)
+- Precomputed lookup tables for fast scaling
+- Aspect-correct rendering for menus, stretched for gameplay
+- Signal handlers for clean exit
+
+Copyright (C) 2026
+---
+ doomgeneric/Makefile.mipsel       |  73 +++++++
+ doomgeneric/doomgeneric_linuxvt.c | 342 ++++++++++++++++++++++++++++--
+ doomgeneric/qemu-gcc-wrapper.sh   |  22 ++
+ 3 files changed, 418 insertions(+), 19 deletions(-)
+ create mode 100644 doomgeneric/Makefile.mipsel
+ create mode 100755 doomgeneric/qemu-gcc-wrapper.sh
+
 diff --git a/doomgeneric/Makefile.mipsel b/doomgeneric/Makefile.mipsel
 new file mode 100644
 index 0000000..49f4364
@@ -515,23 +540,6 @@ index ed94dd9..f3e25d9 100644
  	}
  
  	checkKeys();
-diff --git a/doomgeneric/m_menu.c b/doomgeneric/m_menu.c
-index 6df9655..4feb72c 100644
---- a/doomgeneric/m_menu.c
-+++ b/doomgeneric/m_menu.c
-@@ -1167,10 +1167,8 @@ static char *M_SelectEndMessage(void)
- 
- void M_QuitDOOM(int choice)
- {
--    DEH_snprintf(endstring, sizeof(endstring), "%s\n\n" DOSY,
--                 DEH_String(M_SelectEndMessage()));
--
--    M_StartMessage(endstring,M_QuitResponse,true);
-+    // Skip confirmation on embedded devices (no keyboard for 'y')
-+    I_Quit();
- }
- 
- 
 diff --git a/doomgeneric/qemu-gcc-wrapper.sh b/doomgeneric/qemu-gcc-wrapper.sh
 new file mode 100755
 index 0000000..d1c4fe1
@@ -560,3 +568,6 @@ index 0000000..d1c4fe1
 +# Use QEMU to run the x86-64 compiler binary directly with proper library paths
 +exec qemu-x86_64 -L "$HOST_DIR" -E LD_LIBRARY_PATH="$HOST_DIR/lib" "$TOOLCHAIN_DIR/bin/.mipsel-openwrt-linux-musl-gcc.bin" "$@"
 +
+-- 
+2.48.1
+
