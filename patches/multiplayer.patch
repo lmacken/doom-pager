@@ -83,7 +83,7 @@ index 0000000..123448a
 +	@echo OBJS: $(OBJS)
 +
 diff --git a/doomgeneric/d_loop.c b/doomgeneric/d_loop.c
-index 1939dbd..936b441 100644
+index 1939dbd..1fe1c58 100644
 --- a/doomgeneric/d_loop.c
 +++ b/doomgeneric/d_loop.c
 @@ -37,9 +37,13 @@
@@ -101,7 +101,7 @@ index 1939dbd..936b441 100644
  // The complete set of data for a particular tic.
  
  typedef struct
-@@ -437,15 +441,90 @@ void D_StartNetGame(net_gamesettings_t *settings,
+@@ -437,15 +441,99 @@ void D_StartNetGame(net_gamesettings_t *settings,
      //    printf("Syncing netgames like Vanilla Doom.\n");
      //}
  #else
@@ -118,17 +118,26 @@ index 1939dbd..936b441 100644
 +    // If we're connected to a network game, send GAMESTART and wait for response
 +    if (net_client_connected)
 +    {
-+        // Fill in default settings to send to server
++        // Use command-line values (from d_main.c) for game settings
++        extern int startepisode;
++        extern int startmap;
++        extern int startskill;
++        extern int nomonsters;
++        extern int fastparm;
++        extern int respawnparm;
++        extern int timelimit;
++        
++        // Fill in settings to send to server
 +        settings->ticdup = 1;
 +        settings->extratics = 1;
 +        settings->deathmatch = 1;  // Deathmatch mode
-+        settings->episode = 1;
-+        settings->map = 1;
-+        settings->skill = 2;  // Medium
-+        settings->nomonsters = 0;
-+        settings->fast_monsters = 0;
-+        settings->respawn_monsters = 0;
-+        settings->timelimit = 0;
++        settings->episode = startepisode;
++        settings->map = startmap;
++        settings->skill = startskill;
++        settings->nomonsters = nomonsters;
++        settings->fast_monsters = fastparm;
++        settings->respawn_monsters = respawnparm;
++        settings->timelimit = timelimit;
 +        settings->loadgame = -1;
 +        settings->lowres_turn = 0;
 +        settings->new_sync = 0;
@@ -201,7 +210,7 @@ index 1939dbd..936b441 100644
  #endif
  }
  
-@@ -476,7 +555,7 @@ boolean D_InitNetGame(net_connect_data_t *connect_data)
+@@ -476,7 +564,7 @@ boolean D_InitNetGame(net_connect_data_t *connect_data)
      {
          NET_SV_Init();
          NET_SV_AddModule(&net_loop_server_module);
@@ -210,7 +219,7 @@ index 1939dbd..936b441 100644
          NET_SV_RegisterWithMaster();
  
          net_loop_client_module.InitClient();
-@@ -515,8 +594,8 @@ boolean D_InitNetGame(net_connect_data_t *connect_data)
+@@ -515,8 +603,8 @@ boolean D_InitNetGame(net_connect_data_t *connect_data)
  
          if (i > 0)
          {
@@ -254,7 +263,7 @@ index dff6936..724210e 100644
  // Enables sound output
  
 diff --git a/doomgeneric/doomgeneric_linuxvt.c b/doomgeneric/doomgeneric_linuxvt.c
-index ed94dd9..bab7cb7 100644
+index ed94dd9..b004b41 100644
 --- a/doomgeneric/doomgeneric_linuxvt.c
 +++ b/doomgeneric/doomgeneric_linuxvt.c
 @@ -6,6 +6,8 @@
@@ -439,12 +448,12 @@ index ed94dd9..bab7cb7 100644
  		
  	unsigned char key = convertToDoomKey(keyCode);
  	if (key == 0xFF) // unknown, don't process it
-@@ -323,6 +446,31 @@ static void checkKeys() {
+@@ -323,6 +446,32 @@ static void checkKeys() {
  	return;
  }
  
 +// Check for lobby-specific input: returns 1=start, -1=quit, 0=nothing
-+// Green button (BTN_B/305) = start, Red button (BTN_A/304) = quit
++// Pager buttons: 0x131 (305) = GREEN button, 0x130 (304) = RED button
 +int DG_CheckLobbyInput(void)
 +{
 +	int ret, i;
@@ -458,10 +467,11 @@ index ed94dd9..bab7cb7 100644
 +		if (pollfds[i].revents & POLLIN) {
 +			read(inputFds[i], &ev, sizeof(ev));
 +			if (ev.type == EV_KEY && ev.value == 1) {  // Key press
-+				if (ev.code == BTN_B || ev.code == KEY_SPACE || ev.code == KEY_ENTER) {
-+					result = 1;  // Start game
-+				} else if (ev.code == BTN_A || ev.code == KEY_ESC) {
-+					result = -1; // Quit
++				// Use exact codes: 0x131 = GREEN, 0x130 = RED
++				if (ev.code == 0x131 || ev.code == KEY_SPACE || ev.code == KEY_ENTER) {
++					result = 1;  // GREEN = Start game
++				} else if (ev.code == 0x130 || ev.code == KEY_ESC) {
++					result = -1; // RED = Quit
 +				}
 +			}
 +		}
@@ -471,7 +481,7 @@ index ed94dd9..bab7cb7 100644
  
  #define TEST_KEY(k) (keybits[(k)/8] & (1 << ((k)%8)))
  static int isKeyboard(const char *devPath) {
-@@ -353,10 +501,17 @@ static int isKeyboard(const char *devPath) {
+@@ -353,10 +502,17 @@ static int isKeyboard(const char *devPath) {
  		return 0;
  	}
  
@@ -489,7 +499,7 @@ index ed94dd9..bab7cb7 100644
  
  	close(fd);
  	return 0;
-@@ -409,6 +564,30 @@ void DG_Init() {
+@@ -409,6 +565,30 @@ void DG_Init() {
  	struct fb_var_screeninfo info;
  	struct fb_fix_screeninfo finfo;
  
@@ -520,7 +530,7 @@ index ed94dd9..bab7cb7 100644
  	//
  	// set up the framebuffer
  	//
-@@ -434,19 +613,96 @@ void DG_Init() {
+@@ -434,19 +614,96 @@ void DG_Init() {
  	fbWidth = info.xres;
  	fbHeight = info.yres;
  	fbBytesPerPixel = info.bits_per_pixel / 8;
@@ -627,7 +637,7 @@ index ed94dd9..bab7cb7 100644
  
  	//
  	// set up input
-@@ -460,16 +716,91 @@ void DG_Init() {
+@@ -460,16 +717,91 @@ void DG_Init() {
  	gettimeofday(&startTime, NULL);
  }
  
@@ -786,10 +796,10 @@ index 6df9655..4feb72c 100644
  
 diff --git a/doomgeneric/net_client.c b/doomgeneric/net_client.c
 new file mode 100644
-index 0000000..964eedc
+index 0000000..c8025c3
 --- /dev/null
 +++ b/doomgeneric/net_client.c
-@@ -0,0 +1,1058 @@
+@@ -0,0 +1,1052 @@
 +//
 +// Copyright(C) 2005-2014 Simon Howard
 +// Copyright(C) 2026 WiFi Pineapple Pager port
@@ -1789,15 +1799,9 @@ index 0000000..964eedc
 +            }
 +            lobby_update_timer--;
 +            
-+            // Check for input
++            // Check for input (Green button to start if controller)
 +            input = DG_CheckLobbyInput();
-+            if (input == -1) {
-+                // User pressed quit (Red button)
-+                fprintf(stderr, "NET_WaitForLaunch: User quit from lobby\n");
-+                net_client_connected = false;
-+                return;
-+            }
-+            else if (input == 1 && net_client_wait_data.is_controller) {
++            if (input == 1 && net_client_wait_data.is_controller) {
 +                // Controller pressed start (Green button)
 +                fprintf(stderr, "NET_WaitForLaunch: Controller starting game!\n");
 +                NET_CL_LaunchGame();
@@ -2008,10 +2012,10 @@ index 0000000..f531025
 +
 diff --git a/doomgeneric/net_lobby.c b/doomgeneric/net_lobby.c
 new file mode 100644
-index 0000000..832f4cd
+index 0000000..a5f6c27
 --- /dev/null
 +++ b/doomgeneric/net_lobby.c
-@@ -0,0 +1,335 @@
+@@ -0,0 +1,332 @@
 +//
 +// Copyright(C) 2026 WiFi Pineapple Pager port
 +//
@@ -2329,16 +2333,13 @@ index 0000000..832f4cd
 +    }
 +    
 +    // Instructions at bottom
-+    y = LOBBY_HEIGHT - 50;
++    y = LOBBY_HEIGHT - 40;
 +    
 +    if (is_controller) {
 +        lobby_draw_centered(y, "GREEN = START GAME", RGB565_GREEN);
-+        y += 14;
 +    } else {
 +        lobby_draw_centered(y, "Waiting for host...", RGB565_YELLOW);
-+        y += 14;
 +    }
-+    lobby_draw_centered(y, "RED = QUIT", RGB565_RED);
 +    
 +    // Flush to screen
 +    lobby_flush();
