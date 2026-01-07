@@ -139,7 +139,6 @@ chocolate-doom -iwad doom1.wad -connect 64.227.99.100:2342
 
 - further rendering optimizations (especially the intro demo)
 - easy cheats
-- external keyboard support
 - DOOM theme ringtone jingle at startup
 - vibrate when hit
 
