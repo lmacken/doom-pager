@@ -1,12 +1,9 @@
 # DOOM for WiFi Pineapple Pager
 
-Play the classic 1993 FPS on your WiFi Pineapple Pager!
+Play the classic 1993 FPS (and more) on your WiFi Pineapple Pager!
 
 [![Darren Kitchen playing DOOM on the Pager](doomdarren.png)](https://www.youtube.com/live/Er7XwjwmfIU?si=CsJcLTFFy_HVQuCv&t=15302)
 *Darren Kitchen demoing DOOM on the Pager — [watch the full video](https://www.youtube.com/live/Er7XwjwmfIU?si=CsJcLTFFy_HVQuCv&t=15302)*
-
-| | |
-|:---:|:---:|
 
 ## Quick Install
 
