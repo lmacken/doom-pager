@@ -2909,7 +2909,7 @@ new file mode 100644
 index 0000000..ab6b8ac
 --- /dev/null
 +++ b/doomgeneric/net_socket.c
-@@ -0,0 +1,298 @@
+@@ -0,0 +1,297 @@
 +//
 +// Copyright(C) 2026 WiFi Pineapple Pager port
 +//
@@ -3049,8 +3049,7 @@ index 0000000..ab6b8ac
 +    sock = (server_socket >= 0) ? server_socket : client_socket;
 +    if (sock < 0)
 +    {
-+        fprintf(stderr, "NET_Socket_RecvPacket: No socket (server=%d, client=%d)\n",
-+                server_socket, client_socket);
++        // No socket - single-player mode, silently return
 +        return false;
 +    }
 +
