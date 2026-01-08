@@ -17,3 +17,11 @@ package/
 # Editor
 *.swp
 *~
+wads/*.wad
+wads/*.WAD
+wads/*.zip
+payloads/user/games/doom-registered/
+payloads/user/games/doom2/
+payloads/user/games/doom2-nerve/
+payloads/user/games/doom-sigil/
+payloads/user/games/doom-sigil2/
