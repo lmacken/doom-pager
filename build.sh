@@ -15,18 +15,21 @@ PAGER="${PAGER_HOST:-root@172.16.52.1}"
 DEST="/root/payloads/user/games"
 
 SDK_URL="https://downloads.openwrt.org/releases/22.03.5/targets/ramips/mt76x8/openwrt-sdk-22.03.5-ramips-mt76x8_gcc-11.2.0_musl.Linux-x86_64.tar.xz"
-DOOMGENERIC_REPO="https://github.com/ozkl/doomgeneric.git"
+DOOMGENERIC_REPO="https://github.com/lmacken/doomgeneric-pager.git"
+DOOMGENERIC_BRANCH="pager"
 WAD_URL="https://distro.ibiblio.org/slitaz/sources/packages/d/doom1.wad"
 
 # Parse args
 SKIP_DEPLOY=0
 SKIP_RELEASE=0
 DEPLOY_ONLY=0
+USE_DEV_BRANCH=0
 for arg in "$@"; do
     case $arg in
         --no-deploy) SKIP_DEPLOY=1 ;;
         --no-release) SKIP_RELEASE=1 ;;
         --deploy-only|--sync) DEPLOY_ONLY=1 ;;
+        --dev) USE_DEV_BRANCH=1 ;;
         --clean) rm -rf "$BUILD_DIR"; echo "Cleaned build dir"; exit 0 ;;
         --help|-h)
             echo "Usage: $0 [options]"
@@ -34,27 +37,46 @@ for arg in "$@"; do
             echo "  --no-deploy   Skip deploying to Pager"
             echo "  --no-release  Skip populating release directory"
             echo "  --deploy-only Sync release files to Pager without building"
+            echo "  --dev         Build from 'dev' branch (experimental)"
             echo "  --clean       Remove build directory and exit"
             exit 0
             ;;
     esac
 done
 
+# Override branch if --dev specified
+if [ "$USE_DEV_BRANCH" = "1" ]; then
+    DOOMGENERIC_BRANCH="dev"
+    RELEASE_DIR="$SCRIPT_DIR/payloads/user/games/doom-dev"
+    RELEASE_DIR_DM=""  # No deathmatch for dev builds
+    echo "*** DEV BUILD - using 'dev' branch ***"
+fi
+
 # Deploy-only mode: just sync existing release files
 if [ "$DEPLOY_ONLY" = "1" ]; then
-    echo "Deploying release files to $PAGER..."
-    if [ ! -d "$RELEASE_DIR" ] || [ ! -d "$RELEASE_DIR_DM" ]; then
-        echo "ERROR: Release directories not found. Run build first."
-        exit 1
+    if [ "$USE_DEV_BRANCH" = "1" ]; then
+        echo "Deploying DEV release files to $PAGER..."
+        if [ ! -d "$RELEASE_DIR" ]; then
+            echo "ERROR: doom-dev directory not found. Run './build.sh --dev' first."
+            exit 1
+        fi
+        ssh "$PAGER" "mkdir -p $DEST/doom-dev" 2>/dev/null || { echo "Cannot connect to $PAGER"; exit 1; }
+        scp "$RELEASE_DIR"/* "$PAGER:$DEST/doom-dev/"
+        ssh "$PAGER" "chmod +x $DEST/doom-dev/doomgeneric $DEST/doom-dev/*.sh"
+        echo "Done! DEV synced to $PAGER:$DEST/doom-dev/"
+    else
+        echo "Deploying release files to $PAGER..."
+        if [ ! -d "$RELEASE_DIR" ] || [ ! -d "$RELEASE_DIR_DM" ]; then
+            echo "ERROR: Release directories not found. Run build first."
+            exit 1
+        fi
+        ssh "$PAGER" "mkdir -p $DEST/doom $DEST/doom-deathmatch" 2>/dev/null || { echo "Cannot connect to $PAGER"; exit 1; }
+        scp "$RELEASE_DIR"/* "$PAGER:$DEST/doom/"
+        ssh "$PAGER" "chmod +x $DEST/doom/doomgeneric $DEST/doom/*.sh"
+        scp "$RELEASE_DIR_DM/payload.sh" "$RELEASE_DIR_DM/SHA256SUMS" "$PAGER:$DEST/doom-deathmatch/"
+        ssh "$PAGER" "cd $DEST/doom-deathmatch && rm -f doomgeneric doom1.wad && ln -s ../doom/doomgeneric . && ln -s ../doom/doom1.wad . && chmod +x *.sh"
+        echo "Done! Synced to $PAGER:$DEST/"
     fi
-    ssh "$PAGER" "mkdir -p $DEST/doom $DEST/doom-deathmatch" 2>/dev/null || { echo "Cannot connect to $PAGER"; exit 1; }
-    # Single-player: full files
-    scp "$RELEASE_DIR"/* "$PAGER:$DEST/doom/"
-    ssh "$PAGER" "chmod +x $DEST/doom/doomgeneric $DEST/doom/*.sh"
-    # Deathmatch: payload only, symlink binary and WAD
-    scp "$RELEASE_DIR_DM/payload.sh" "$RELEASE_DIR_DM/SHA256SUMS" "$PAGER:$DEST/doom-deathmatch/"
-    ssh "$PAGER" "cd $DEST/doom-deathmatch && rm -f doomgeneric doom1.wad && ln -s ../doom/doomgeneric . && ln -s ../doom/doom1.wad . && chmod +x *.sh"
-    echo "Done! Synced to $PAGER:$DEST/"
     exit 0
 fi
 
@@ -84,14 +106,16 @@ else
     echo "[1/6] SDK ready"
 fi
 
-# 2. Clone/reset doomgeneric
+# 2. Clone/update doomgeneric fork
 if [ ! -d "$BUILD_DIR/doomgeneric/.git" ]; then
-    echo "[2/6] Cloning doomgeneric..."
+    echo "[2/6] Cloning doomgeneric-pager..."
     rm -rf "$BUILD_DIR/doomgeneric"
-    git clone --depth 1 "$DOOMGENERIC_REPO" "$BUILD_DIR/doomgeneric"
+    git clone -b "$DOOMGENERIC_BRANCH" --depth 1 "$DOOMGENERIC_REPO" "$BUILD_DIR/doomgeneric"
 else
-    echo "[2/6] Resetting doomgeneric..."
-    git -C "$BUILD_DIR/doomgeneric" checkout . 
+    echo "[2/6] Updating doomgeneric-pager..."
+    git -C "$BUILD_DIR/doomgeneric" fetch origin
+    git -C "$BUILD_DIR/doomgeneric" checkout "$DOOMGENERIC_BRANCH"
+    git -C "$BUILD_DIR/doomgeneric" reset --hard "origin/$DOOMGENERIC_BRANCH"
     git -C "$BUILD_DIR/doomgeneric" clean -fd
 fi
 
@@ -103,33 +127,8 @@ else
     echo "[3/6] WAD ready"
 fi
 
-# 4. Apply patches & build
-echo "[4/6] Patching and building..."
-
-# Apply pager patch first
-echo "  - Applying wifi-pineapple-pager.patch..."
-git -C "$BUILD_DIR/doomgeneric" apply "$SCRIPT_DIR/patches/wifi-pineapple-pager.patch"
-
-# Commit the pager patch so we can use 3-way merge for multiplayer
-git -C "$BUILD_DIR/doomgeneric" add -A
-git -C "$BUILD_DIR/doomgeneric" commit -m "pager patch" --quiet
-
-# multiplayer.patch creates a new Makefile.mipsel with network objects
-# Delete only Makefile.mipsel (keep qemu-gcc-wrapper.sh - it's used by the new Makefile)
-echo "  - Applying multiplayer.patch..."
-rm -f "$BUILD_DIR/doomgeneric/doomgeneric/Makefile.mipsel"
-git -C "$BUILD_DIR/doomgeneric" apply --3way "$SCRIPT_DIR/patches/multiplayer.patch" || {
-    echo "  - Resolving merge conflicts..."
-    # For doomgeneric_linuxvt.c, keep theirs (multiplayer version has the exports)
-    cd "$BUILD_DIR/doomgeneric"
-    for f in doomgeneric/*.c doomgeneric/*.h; do
-        if grep -q "<<<<<<" "$f" 2>/dev/null; then
-            sed -i '/<<<<<<< ours/,/=======/d' "$f"
-            sed -i '/>>>>>>> theirs/d' "$f"
-        fi
-    done
-    cd - > /dev/null
-}
+# 4. Build
+echo "[4/6] Building..."
 
 export OPENWRT_SDK="$BUILD_DIR/openwrt-sdk"
 make -C "$BUILD_DIR/doomgeneric/doomgeneric" -f Makefile.mipsel clean
@@ -146,31 +145,65 @@ ls -lh "$BINARY" "$WAD"
 if [ "$SKIP_RELEASE" = "0" ]; then
     echo ""
     echo "[5/6] Populating release directories..."
-    mkdir -p "$RELEASE_DIR" "$RELEASE_DIR_DM"
+    mkdir -p "$RELEASE_DIR"
     
-    # Single-player: doom/
+    # Main payload
     cp "$BINARY" "$RELEASE_DIR/"
     cp "$WAD" "$RELEASE_DIR/"
-    cp "$SCRIPT_DIR/payload.sh" "$RELEASE_DIR/"
+    
+    # Use appropriate payload script
+    if [ "$USE_DEV_BRANCH" = "1" ]; then
+        # Dev build: create simple payload
+        cat > "$RELEASE_DIR/payload.sh" << 'DEVPAYLOAD'
+#!/bin/bash
+# Title: DOOM DEV
+# Description: Experimental DOOM build
+# Author: @lmacken
+# Version: dev
+# Category: Games
+
+PAYLOAD_DIR="/root/payloads/user/games/doom-dev"
+cd "$PAYLOAD_DIR" || exit 1
+chmod +x ./doomgeneric
+
+LOG "DOOM DEV (experimental build)"
+LOG "Press any button..."
+WAIT_FOR_INPUT >/dev/null 2>&1
+
+/etc/init.d/pineapplepager stop 2>/dev/null
+/etc/init.d/pineapd stop 2>/dev/null
+sleep 1
+
+./doomgeneric -iwad "$PAYLOAD_DIR/doom1.wad" >/tmp/doom.log 2>&1
+
+/etc/init.d/pineapplepager start 2>/dev/null &
+/etc/init.d/pineapd start 2>/dev/null &
+DEVPAYLOAD
+    else
+        cp "$SCRIPT_DIR/payload.sh" "$RELEASE_DIR/"
+    fi
     chmod +x "$RELEASE_DIR/doomgeneric" "$RELEASE_DIR/payload.sh"
     (cd "$RELEASE_DIR" && sha256sum doomgeneric doom1.wad payload.sh > SHA256SUMS)
-    
-    # Deathmatch: doom-deathmatch/ (symlinks to ../doom/ to save space)
-    rm -f "$RELEASE_DIR_DM/doomgeneric" "$RELEASE_DIR_DM/doom1.wad"
-    ln -s ../doom/doomgeneric "$RELEASE_DIR_DM/doomgeneric"
-    ln -s ../doom/doom1.wad "$RELEASE_DIR_DM/doom1.wad"
-    # Fix path in deathmatch payload (careful to only match full path)
-    sed 's|/user/games/doom"|/user/games/doom-deathmatch"|g' \
-        "$SCRIPT_DIR/payload-deathmatch.sh" > "$RELEASE_DIR_DM/payload.sh"
-    chmod +x "$RELEASE_DIR_DM/payload.sh"
-    (cd "$RELEASE_DIR_DM" && sha256sum payload.sh > SHA256SUMS)
     
     echo ""
     echo "Release: $RELEASE_DIR"
     ls -lh "$RELEASE_DIR"
-    echo ""
-    echo "Release: $RELEASE_DIR_DM"
-    ls -lh "$RELEASE_DIR_DM"
+    
+    # Deathmatch: doom-deathmatch/ (symlinks to ../doom/ to save space)
+    # Skip for dev builds
+    if [ -n "$RELEASE_DIR_DM" ]; then
+        mkdir -p "$RELEASE_DIR_DM"
+        rm -f "$RELEASE_DIR_DM/doomgeneric" "$RELEASE_DIR_DM/doom1.wad"
+        ln -s ../doom/doomgeneric "$RELEASE_DIR_DM/doomgeneric"
+        ln -s ../doom/doom1.wad "$RELEASE_DIR_DM/doom1.wad"
+        sed 's|/user/games/doom"|/user/games/doom-deathmatch"|g' \
+            "$SCRIPT_DIR/payload-deathmatch.sh" > "$RELEASE_DIR_DM/payload.sh"
+        chmod +x "$RELEASE_DIR_DM/payload.sh"
+        (cd "$RELEASE_DIR_DM" && sha256sum payload.sh > SHA256SUMS)
+        echo ""
+        echo "Release: $RELEASE_DIR_DM"
+        ls -lh "$RELEASE_DIR_DM"
+    fi
 else
     echo ""
     echo "[5/6] Skipping release (--no-release)"
@@ -180,21 +213,30 @@ fi
 if [ "$SKIP_DEPLOY" = "0" ]; then
     echo ""
     echo "[6/6] Deploying to $PAGER..."
-    ssh "$PAGER" "mkdir -p $DEST/doom $DEST/doom-deathmatch" 2>/dev/null || { echo "Cannot connect to $PAGER (use --no-deploy to skip)"; exit 1; }
     
-    # Deploy single-player (full files)
-    scp "$RELEASE_DIR"/* "$PAGER:$DEST/doom/"
-    ssh "$PAGER" "chmod +x $DEST/doom/doomgeneric $DEST/doom/*.sh"
-    
-    # Deploy deathmatch (payload only, symlink to doom/ for binary and WAD)
-    scp "$RELEASE_DIR_DM/payload.sh" "$RELEASE_DIR_DM/SHA256SUMS" "$PAGER:$DEST/doom-deathmatch/"
-    ssh "$PAGER" "cd $DEST/doom-deathmatch && rm -f doomgeneric doom1.wad && ln -s ../doom/doomgeneric . && ln -s ../doom/doom1.wad . && chmod +x *.sh"
-    
-    echo ""
-    echo "========================================"
-    echo "  Done! Find DOOM & DOOM Deathmatch"
-    echo "  in the Payloads > Games menu"
-    echo "========================================"
+    if [ "$USE_DEV_BRANCH" = "1" ]; then
+        # Dev build: deploy to doom-dev/
+        ssh "$PAGER" "mkdir -p $DEST/doom-dev" 2>/dev/null || { echo "Cannot connect to $PAGER"; exit 1; }
+        scp "$RELEASE_DIR"/* "$PAGER:$DEST/doom-dev/"
+        ssh "$PAGER" "chmod +x $DEST/doom-dev/doomgeneric $DEST/doom-dev/*.sh"
+        echo ""
+        echo "========================================"
+        echo "  DEV build deployed to DOOM DEV"
+        echo "  in Payloads > Games menu"
+        echo "========================================"
+    else
+        # Normal build: deploy doom/ and doom-deathmatch/
+        ssh "$PAGER" "mkdir -p $DEST/doom $DEST/doom-deathmatch" 2>/dev/null || { echo "Cannot connect to $PAGER (use --no-deploy to skip)"; exit 1; }
+        scp "$RELEASE_DIR"/* "$PAGER:$DEST/doom/"
+        ssh "$PAGER" "chmod +x $DEST/doom/doomgeneric $DEST/doom/*.sh"
+        scp "$RELEASE_DIR_DM/payload.sh" "$RELEASE_DIR_DM/SHA256SUMS" "$PAGER:$DEST/doom-deathmatch/"
+        ssh "$PAGER" "cd $DEST/doom-deathmatch && rm -f doomgeneric doom1.wad && ln -s ../doom/doomgeneric . && ln -s ../doom/doom1.wad . && chmod +x *.sh"
+        echo ""
+        echo "========================================"
+        echo "  Done! Find DOOM & DOOM Deathmatch"
+        echo "  in the Payloads > Games menu"
+        echo "========================================"
+    fi
 else
     echo ""
     echo "[6/6] Skipping deploy (--no-deploy)"

@@ -183,12 +183,12 @@ index 1939dbd..1fe1c58 100644
 +        }
 +        else
 +        {
-+            printf("D_StartNetGame: ERROR - no valid settings from server!\n");
-+            // Fall through to single player defaults
-+            settings->consoleplayer = 0;
-+            settings->num_players = 1;
-+            localplayer = 0;
-+            local_playeringame[0] = true;
++            // Server didn't send game settings - likely a game is already in progress
++            // or there was a connection issue. Exit cleanly with error message.
++            I_Error("Failed to start network game!\n\n"
++                    "The server did not send game settings.\n"
++                    "Another game may already be in progress.\n"
++                    "Try again or connect to a different server.");
 +        }
 +    }
 +    else

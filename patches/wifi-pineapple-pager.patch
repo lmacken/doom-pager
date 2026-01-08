@@ -565,13 +565,30 @@ index 2d1a6c5..a3b2f91 100644
 --- a/doomgeneric/doomdef.h
 +++ b/doomgeneric/doomdef.h
 @@ -38,7 +38,8 @@
- 
+
  // If rangecheck is undefined,
  // most parameter validation debugging code will not be compiled
 -#define RANGECHECK
 +// Disabled for BFG Edition compatibility (560px wide title screens)
 +// #define RANGECHECK
- 
+
  // The maximum number of players, multiplayer/networking.
  #define MAXPLAYERS 4
+
+diff --git a/doomgeneric/v_video.c b/doomgeneric/v_video.c
+index 1234567..abcdefg 100644
+--- a/doomgeneric/v_video.c
++++ b/doomgeneric/v_video.c
+@@ -43,8 +43,9 @@
+ #endif
+
+ // TODO: There are separate RANGECHECK defines for different games, but this
+-// is common code. Fix this.
+-#define RANGECHECK
++// is common code. Fix this. 
++// Disabled for BFG Edition compatibility (560px wide title screens)
++// #define RANGECHECK
+
+ // Blending table used for fuzzpatch, etc.
+ // Only used in Heretic/Hexen
 

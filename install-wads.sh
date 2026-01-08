@@ -60,8 +60,8 @@ declare -A WAD_DATABASE=(
     # SIGIL Compat (Shareware compatible)
     ["c64c059a79e2ec68ab9ca0d5ae5ef7ef0eaba0e5c6adbef8b2ce91f05ee09f33"]="sigil_compat.wad|PWAD|doom|addon|1.21|SIGIL Compat v1.21 (Shareware)"
     
-    # SIGIL II v1.0
-    ["ab75c9352d1ae8fedb581014ec47eb09c28933a6a66e367424dff8ee2810e825"]="sigil2.wad|PWAD|doom|addon|1.0|SIGIL II v1.0 by John Romero"
+    # SIGIL II v1.0 - NOT COMPATIBLE with doomgeneric (Episode 6 music lumps crash)
+    # ["ab75c9352d1ae8fedb581014ec47eb09c28933a6a66e367424dff8ee2810e825"]="sigil2.wad|PWAD|doom|addon|1.0|SIGIL II v1.0 by John Romero"
 )
 
 # ============================================================================
@@ -70,17 +70,17 @@ declare -A WAD_DATABASE=(
 # ============================================================================
 declare -a WAD_CONFIGS=(
     # Base games (IWADs only)
-    "doom-shareware|doom1.wad||DOOM Shareware|DOOM Episode 1: Knee-Deep in the Dead"
-    "doom-registered|doom.wad||DOOM|DOOM (Episodes 1-4)"
+    # Note: doom-shareware skipped - base "doom" payload already has doom1.wad
+    "doom-registered|doom.wad||Ultimate DOOM|The Ultimate DOOM (Episodes 1-4)"
     "doom2|doom2.wad||DOOM II|DOOM II: Hell on Earth"
-    "doom-tnt|tnt.wad||Final DOOM: TNT|Final DOOM: TNT Evilution"
-    "doom-plutonia|plutonia.wad||Final DOOM: Plutonia|Final DOOM: Plutonia Experiment"
+    "doom-tnt|tnt.wad||TNT: Evilution|Final DOOM: TNT Evilution"
+    "doom-plutonia|plutonia.wad||Plutonia|Final DOOM: Plutonia Experiment"
     
     # Add-ons (IWAD + PWAD)
-    "doom2-nerve|doom2.wad|nerve.wad|DOOM II: NRFTL|No Rest for the Living (DOOM II)"
+    "doom2-nerve|doom2.wad|nerve.wad|No Rest for the Living|No Rest for the Living (DOOM II expansion)"
     "doom2-master|doom2.wad|masterlevels.wad|Master Levels|Master Levels for DOOM II"
-    "doom-sigil|doom.wad|sigil.wad|SIGIL|SIGIL by John Romero (Episode 5)"
-    "doom-sigil2|doom.wad|sigil2.wad|SIGIL II|SIGIL II by John Romero (Episode 6)"
+    "doom-sigil|doom.wad|sigil.wad|SIGIL|SIGIL by John Romero (select Episode 3)"
+    # Note: SIGIL II is not compatible with doomgeneric (crashes on Episode 6 music lumps)
 )
 
 # ============================================================================
@@ -189,16 +189,14 @@ Supported IWADs:
   plutonia.wad  - Final DOOM: Plutonia Experiment
 
 Supported PWADs:
-  nerve.wad       - No Rest for the Living (requires doom2.wad)
+  nerve.wad        - No Rest for the Living (requires doom2.wad)
   masterlevels.wad - Master Levels (requires doom2.wad)
-  sigil.wad       - SIGIL Episode 5 (requires doom.wad)
-  sigil2.wad      - SIGIL II Episode 6 (requires doom.wad)
+  sigil.wad        - SIGIL (requires doom.wad) - uses SIGIL_COMPAT version
 
 Notes:
-  - BFG/Unity Edition WADs work but have censored medkits
-  - Original v1.9 WADs recommended for best compatibility
-  - SIGIL adds Episode 5, accessible via New Game menu
-  - SIGIL II adds Episode 6
+  - BFG/Unity Edition WADs fully supported
+  - SIGIL uses the "compat" version which replaces Episode 3
+  - SIGIL II is NOT compatible (Episode 6 music lumps cause crashes)
 EOF
 }
 
@@ -295,10 +293,6 @@ cmd_list() {
                 echo "    PWAD: $pwad (v$pwad_version)"
             fi
             
-            # Warn about BFG edition
-            if [ "$iwad_edition" = "bfg" ]; then
-                log_warn "    Using BFG/Unity Edition - consider original v1.9 for best experience"
-            fi
         else
             log_error "$title ($name)"
             if ! $iwad_ok; then
@@ -343,8 +337,19 @@ create_payload() {
         return 1
     fi
     
-    # Copy WAD files
-    cp "$iwad_path" "$payload_dir/$iwad_basename"
+    # Handle IWAD: symlink to base payloads to save space, or copy if this IS the base
+    if [ "$iwad_basename" = "doom.wad" ] && [ "$name" != "doom-registered" ]; then
+        # Symlink to doom-registered payload
+        ln -sf ../doom-registered/doom.wad "$payload_dir/doom.wad"
+    elif [ "$iwad_basename" = "doom2.wad" ] && [ "$name" != "doom2" ]; then
+        # Symlink to doom2 payload
+        ln -sf ../doom2/doom2.wad "$payload_dir/doom2.wad"
+    else
+        # This is a base payload or unique IWAD - copy the file
+        cp "$iwad_path" "$payload_dir/$iwad_basename"
+    fi
+    
+    # Copy PWAD files (these are unique per payload)
     if [ -n "$pwad_path" ]; then
         cp "$pwad_path" "$payload_dir/$pwad_basename"
     fi
@@ -372,7 +377,6 @@ cd "\$PAYLOAD_DIR" || {
 }
 chmod +x ./doomgeneric
 
-LOG "$title"
 LOG "$desc"
 LOG ""
 LOG "Controls:"
@@ -439,7 +443,18 @@ cmd_install() {
     local skipped=0
     local config
     
+    # Install base payloads first (doom-registered, doom2) so others can symlink to them
+    local ordered_configs=()
     for config in "${WAD_CONFIGS[@]}"; do
+        IFS='|' read -r name _ _ _ _ <<< "$config"
+        if [ "$name" = "doom-registered" ] || [ "$name" = "doom2" ]; then
+            ordered_configs=("$config" "${ordered_configs[@]}")
+        else
+            ordered_configs+=("$config")
+        fi
+    done
+    
+    for config in "${ordered_configs[@]}"; do
         IFS='|' read -r name iwad pwad title desc <<< "$config"
         
         # Skip base doom payloads (handled by build.sh)
@@ -494,7 +509,18 @@ cmd_deploy() {
     local deployed=0
     local config
     
+    # Deploy base payloads first (doom-registered and doom2) so others can symlink to them
+    local ordered_configs=()
     for config in "${WAD_CONFIGS[@]}"; do
+        IFS='|' read -r name _ _ _ _ <<< "$config"
+        if [ "$name" = "doom-registered" ] || [ "$name" = "doom2" ]; then
+            ordered_configs=("$config" "${ordered_configs[@]}")
+        else
+            ordered_configs+=("$config")
+        fi
+    done
+    
+    for config in "${ordered_configs[@]}"; do
         IFS='|' read -r name iwad pwad title desc <<< "$config"
         local payload_dir="$PAYLOADS_DIR/$name"
         
@@ -506,8 +532,24 @@ cmd_deploy() {
         # Create remote directory
         ssh "$PAGER" "mkdir -p $PAGER_DEST/$name"
         
-        # Copy WAD files
-        scp -q "$payload_dir"/*.wad "$payload_dir"/*.WAD "$PAGER:$PAGER_DEST/$name/" 2>/dev/null || true
+        # Handle IWAD deployment: copy or symlink based on payload type
+        local iwad_basename=$(basename "$iwad")
+        if [ "$iwad_basename" = "doom.wad" ] && [ "$name" != "doom-registered" ]; then
+            # Symlink to doom-registered
+            ssh "$PAGER" "cd $PAGER_DEST/$name && rm -f doom.wad && ln -s ../doom-registered/doom.wad ."
+        elif [ "$iwad_basename" = "doom2.wad" ] && [ "$name" != "doom2" ]; then
+            # Symlink to doom2
+            ssh "$PAGER" "cd $PAGER_DEST/$name && rm -f doom2.wad && ln -s ../doom2/doom2.wad ."
+        else
+            # Copy the IWAD (this is a base payload or unique IWAD like tnt.wad)
+            scp -q "$payload_dir/$iwad_basename" "$PAGER:$PAGER_DEST/$name/" 2>/dev/null || true
+        fi
+        
+        # Copy PWAD files (always unique per payload)
+        if [ -n "$pwad" ]; then
+            local pwad_basename=$(basename "$pwad")
+            scp -q "$payload_dir/$pwad_basename" "$PAGER:$PAGER_DEST/$name/" 2>/dev/null || true
+        fi
         
         # Copy payload script and checksums
         scp -q "$payload_dir/payload.sh" "$payload_dir/SHA256SUMS" "$PAGER:$PAGER_DEST/$name/"
