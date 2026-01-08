@@ -560,3 +560,18 @@ index 0000000..d1c4fe1
 +# Use QEMU to run the x86-64 compiler binary directly with proper library paths
 +exec qemu-x86_64 -L "$HOST_DIR" -E LD_LIBRARY_PATH="$HOST_DIR/lib" "$TOOLCHAIN_DIR/bin/.mipsel-openwrt-linux-musl-gcc.bin" "$@"
 +
+diff --git a/doomgeneric/doomdef.h b/doomgeneric/doomdef.h
+index 2d1a6c5..a3b2f91 100644
+--- a/doomgeneric/doomdef.h
++++ b/doomgeneric/doomdef.h
+@@ -38,7 +38,8 @@
+ 
+ // If rangecheck is undefined,
+ // most parameter validation debugging code will not be compiled
+-#define RANGECHECK
++// Disabled for BFG Edition compatibility (560px wide title screens)
++// #define RANGECHECK
+ 
+ // The maximum number of players, multiplayer/networking.
+ #define MAXPLAYERS 4
+
