@@ -1,6 +1,6 @@
 # DOOM for WiFi Pineapple Pager
 
-Play the classic 1993 FPS (and more) on your WiFi Pineapple Pager!
+Play the classic 1993 FPS on your WiFi Pineapple Pager!
 
 [![Darren Kitchen playing DOOM on the Pager](doomdarren.png)](https://www.youtube.com/live/Er7XwjwmfIU?si=CsJcLTFFy_HVQuCv&t=15302)
 *Darren Kitchen demoing DOOM on the Pager — [watch the full video](https://www.youtube.com/live/Er7XwjwmfIU?si=CsJcLTFFy_HVQuCv&t=15302)*
@@ -26,6 +26,8 @@ Then find DOOM in: **Payloads → User → Games → DOOM**
 | | |
 |:---:|:---:|
 | ![Pager Menu](img/menu-1.png) | ![Games Menu](img/menu-2.png) |
+
+**Bring your own WADs!** Only the shareware `doom1.wad` is included. Place your legally obtained WAD files in the `wads/` directory to play the full games.
 
 ### IWADs (Base Games)
 
@@ -70,9 +72,8 @@ Then find DOOM in: **Payloads → User → Games → DOOM**
 
 ### WAD Compatibility Notes
 
-- **BFG/Unity Edition** WADs fully supported
 - **SIGIL** uses the "compat" version which replaces Episode 3 (select Episode 3 in menu)
-- **SIGIL II** is NOT compatible (Episode 6 music lumps cause crashes)
+- **SIGIL II** is NOT compatible (requires UMAPINFO support)
 
 ## Controls
 
@@ -118,10 +119,11 @@ chocolate-doom -iwad doom1.wad -connect 64.227.99.100:2342
 
 This will:
 1. Download the OpenWrt SDK (~400MB, cached in `build/`)
-2. Clone doomgeneric
-3. Apply our patches (display, input, networking)
-4. Cross-compile for MIPS
-5. Deploy to Pager (if connected)
+2. Clone our [doomgeneric fork](https://github.com/lmacken/doomgeneric-pager) (`pager` branch)
+3. Cross-compile for MIPS
+4. Deploy to Pager (if connected)
+
+For experimental builds, use `./build.sh --dev` which pulls from the `dev` branch and creates a separate `DOOM DEV` payload.
 
 ### Requirements
 
@@ -159,14 +161,13 @@ The vanilla DOOM engine has hardcoded limits that can cause crashes on complex m
 | MAXVISSPRITES | 128 | 256 |
 | MAXDRAWSEGS | 256 | 512 |
 
-### Patch Features
+### Engine Modifications
 
 **Display**
 - 16-bit RGB565 framebuffer support
 - 90° CCW rotation for portrait display
 - Full-screen stretched scaling with widened FOV (gameplay)
 - Aspect-correct rendering with letterboxing (menus/title)
-- BFG/Unity Edition WAD support
 - Precomputed lookup tables for fast scaling
 
 **Input**
@@ -185,10 +186,10 @@ The vanilla DOOM engine has hardcoded limits that can cause crashes on complex m
 ├── build.sh              # Main build script
 ├── install-wads.sh       # WAD installer tool
 ├── screenshot.sh         # Pager screenshot utility
-├── patches/              # Patches for doomgeneric
-├── wads/                 # Place WAD files here
+├── doomgeneric/          # Engine fork (github.com/lmacken/doomgeneric-pager)
+├── wads/                 # Place your WAD files here
 ├── img/                  # Screenshots
-├── ansible/              # Server setup playbook
+├── ansible/              # Deathmatch server playbook
 └── payloads/             # Pager payload directories
     └── user/games/
         ├── doom/              # Base DOOM (shareware)
