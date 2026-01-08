@@ -224,17 +224,12 @@ deploy_wads() {
             echo "Deploying $name..."
             ssh "$PAGER" "mkdir -p $PAGER_DEST/$name"
             
-            # For symlinked doomgeneric, copy the actual file
-            if [ -L "$payload_dir/doomgeneric" ]; then
-                scp "$PAYLOADS_DIR/doom/doomgeneric" "$PAGER:$PAGER_DEST/$name/"
-            else
-                scp "$payload_dir/doomgeneric" "$PAGER:$PAGER_DEST/$name/"
-            fi
-            
             # Copy WADs and payload
             scp "$payload_dir"/*.wad "$payload_dir"/*.WAD "$PAGER:$PAGER_DEST/$name/" 2>/dev/null
             scp "$payload_dir/payload.sh" "$payload_dir/SHA256SUMS" "$PAGER:$PAGER_DEST/$name/"
-            ssh "$PAGER" "chmod +x $PAGER_DEST/$name/doomgeneric $PAGER_DEST/$name/payload.sh"
+            
+            # Symlink doomgeneric from main doom payload (saves ~1.4MB per WAD)
+            ssh "$PAGER" "cd $PAGER_DEST/$name && rm -f doomgeneric && ln -s ../doom/doomgeneric . && chmod +x payload.sh"
         fi
     done
     
