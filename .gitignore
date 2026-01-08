@@ -25,3 +25,10 @@ payloads/user/games/doom2/
 payloads/user/games/doom2-nerve/
 payloads/user/games/doom-sigil/
 payloads/user/games/doom-sigil2/
+
+# WAD files (user must provide their own)
+wads/*.wad
+wads/*.WAD
+payloads/user/games/*/*.wad
+payloads/user/games/*/*.WAD
+wads.old/
