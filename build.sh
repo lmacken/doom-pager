@@ -215,6 +215,11 @@ cd "$PAYLOAD_DIR" || exit 1
 chmod +x ./doomgeneric
 
 LOG "DOOM DEV (experimental build)"
+LOG ""
+LOG "D-pad=Move  Red=Fire"
+LOG "Green+Up=Use  Green+L/R=Strafe"
+LOG "Red+Green=Quit"
+LOG ""
 LOG "Press any button..."
 WAIT_FOR_INPUT >/dev/null 2>&1
 
@@ -242,6 +247,11 @@ cd "$PAYLOAD_DIR" || exit 1
 chmod +x ./doomgeneric
 
 LOG "DOOM LOCAL (dev build)"
+LOG ""
+LOG "D-pad=Move  Red=Fire"
+LOG "Green+Up=Use  Green+L/R=Strafe"
+LOG "Red+Green=Quit"
+LOG ""
 LOG "Press any button..."
 WAIT_FOR_INPUT >/dev/null 2>&1
 

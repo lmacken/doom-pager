@@ -378,9 +378,8 @@ chmod +x ./doomgeneric
 
 LOG "$desc"
 LOG ""
-LOG "Controls:"
 LOG "D-pad=Move  Red=Fire"
-LOG "Green=Select/Use"
+LOG "Green+Up=Use  Green+L/R=Strafe"
 LOG "Red+Green=Quit"
 LOG ""
 LOG "Press any button..."
