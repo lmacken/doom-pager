@@ -162,6 +162,7 @@ fi
 
 # Display controls
 LOG ""
+LOG "Controls:"
 LOG "D-pad=Move  Red=Fire"
 LOG "Green+Up=Use  Green+L/R=Strafe"
 LOG "Red+Green=Quit"
@@ -169,9 +170,15 @@ LOG ""
 LOG "Press any button to connect..."
 WAIT_FOR_INPUT >/dev/null 2>&1
 
-# Stop the Pager UI
+# Stop services to free CPU and memory for DOOM
+/etc/init.d/php8-fpm stop 2>/dev/null
+/etc/init.d/nginx stop 2>/dev/null
+/etc/init.d/bluetoothd stop 2>/dev/null
 /etc/init.d/pineapplepager stop 2>/dev/null
 /etc/init.d/pineapd stop 2>/dev/null
+
+# Free cached memory
+echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
 
 sleep 1
 
@@ -192,7 +199,10 @@ EXTRA_ARGS=""
 # Run DOOM with high priority for smoother gameplay
 "$PAYLOAD_DIR/doomgeneric" -iwad "$WAD_FILE" -connect "$SERVER_IP:$SERVER_PORT" -warp "$EPISODE" "$MAP_NUM" $EXTRA_ARGS >/tmp/doom.log 2>&1
 
-# Restore Pager UI
+# Restore services after DOOM exits
+/etc/init.d/php8-fpm start 2>/dev/null &
+/etc/init.d/nginx start 2>/dev/null &
+/etc/init.d/bluetoothd start 2>/dev/null &
 /etc/init.d/pineapplepager start 2>/dev/null &
 /etc/init.d/pineapd start 2>/dev/null &
 
