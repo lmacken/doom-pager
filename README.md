@@ -146,7 +146,7 @@ Capture a screenshot from your Pager's framebuffer and save it locally:
 
 ## Technical Details
 
-- **CPU**: [MIPS 24KEc](https://www.mips.com/products/warrior/m-class-m5150/) @ 580MHz (soft-float, 8-stage pipeline)
+- **CPU**: [MIPS 24KEc](https://en.wikipedia.org/wiki/MIPS_architecture#MIPS32/64_Release_2) @ 580MHz (soft-float, 8-stage pipeline)
 - **RAM**: 64MB DDR2
 - **Display**: 222×480 [RGB565](https://en.wikipedia.org/wiki/High_color) via SPI (~20 FPS refresh limit)
 - **Input**: GPIO buttons via `/dev/input/event0`
