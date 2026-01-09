@@ -1,6 +1,6 @@
 # DOOM for WiFi Pineapple Pager
 
-Play the classic 1993 FPS on your WiFi Pineapple Pager!
+Play the classic 1993 FPS on your [WiFi Pineapple Pager](https://shop.hak5.org/products/wifi-pineapple-pager)!
 
 [![Darren Kitchen playing DOOM on the Pager](doomdarren.png)](https://www.youtube.com/live/Er7XwjwmfIU?si=CsJcLTFFy_HVQuCv&t=15302)
 *Darren Kitchen demoing DOOM on the Pager — [watch the full video](https://www.youtube.com/live/Er7XwjwmfIU?si=CsJcLTFFy_HVQuCv&t=15302)*
@@ -33,11 +33,11 @@ Then find DOOM in: **Payloads → Games → DOOM**
 
 | Game | WAD File | Status |
 |------|----------|--------|
-| DOOM Shareware | `doom1.wad` | ✅ Works |
-| DOOM Registered | `doom.wad` | ✅ Works |
-| DOOM II | `doom2.wad` | ✅ Works |
-| Final DOOM: TNT | `tnt.wad` | ✅ Works |
-| Final DOOM: Plutonia | `plutonia.wad` | ✅ Works |
+| [DOOM Shareware](https://doomwiki.org/wiki/DOOM1.WAD) | `doom1.wad` | ✅ Works |
+| [DOOM Registered](https://doomwiki.org/wiki/DOOM.WAD) | `doom.wad` | ✅ Works |
+| [DOOM II](https://doomwiki.org/wiki/DOOM2.WAD) | `doom2.wad` | ✅ Works |
+| [Final DOOM: TNT Evilution](https://doomwiki.org/wiki/TNT:_Evilution) | `tnt.wad` | ✅ Works |
+| [Final DOOM: Plutonia](https://doomwiki.org/wiki/The_Plutonia_Experiment) | `plutonia.wad` | ✅ Works |
 
 | | |
 |:---:|:---:|
@@ -48,10 +48,10 @@ Then find DOOM in: **Payloads → Games → DOOM**
 
 | Add-on | WAD File | Requires | Status |
 |--------|----------|----------|--------|
-| No Rest for the Living | `nerve.wad` | `doom2.wad` | ✅ Works |
-| Master Levels | `masterlevels.wad` | `doom2.wad` | ✅ Works |
-| SIGIL | `sigil.wad` | `doom.wad` | ✅ Works (Episode 3) |
-| SIGIL II | `sigil2.wad` | `doom.wad` | ❌ Incompatible |
+| [No Rest for the Living](https://doomwiki.org/wiki/No_Rest_for_the_Living) | `nerve.wad` | `doom2.wad` | ✅ Works |
+| [Master Levels](https://doomwiki.org/wiki/Master_Levels_for_Doom_II) | `masterlevels.wad` | `doom2.wad` | ✅ Works |
+| [SIGIL](https://doomwiki.org/wiki/SIGIL) | `sigil.wad` | `doom.wad` | ✅ Works (Episode 3) |
+| [SIGIL II](https://doomwiki.org/wiki/SIGIL_II) | `sigil2.wad` | `doom.wad` | ❌ Incompatible |
 
 | | |
 |:---:|:---:|
@@ -72,7 +72,7 @@ Then find DOOM in: **Payloads → Games → DOOM**
 ### WAD Compatibility Notes
 
 - **SIGIL** uses the "compat" version which replaces Episode 3 (select Episode 3 in menu)
-- **SIGIL II** is NOT compatible (requires UMAPINFO support)
+- **SIGIL II** is NOT compatible (requires [UMAPINFO](https://doomwiki.org/wiki/UMAPINFO) support)
 
 ## Controls
 
@@ -100,13 +100,13 @@ Connect to our public DOOM server for multiplayer deathmatch!
 
 Run the **DOOM Deathmatch** payload from: Payloads → Games
 
-Desktop players can join with Chocolate Doom:
+Desktop players can join with [Chocolate Doom](https://www.chocolate-doom.org/):
 ```bash
 chocolate-doom -iwad doom1.wad -connect 64.227.99.100:2342
 ```
 
 ### Network Features
-- Chocolate Doom 3.1.x protocol compatibility
+- [Chocolate Doom](https://www.chocolate-doom.org/) 3.1.x protocol compatibility
 - Works with vanilla Chocolate Doom server
 - POSIX socket-based network layer (no SDL dependency)
 
@@ -146,20 +146,20 @@ Capture a screenshot from your Pager's framebuffer and save it locally:
 
 ## Technical Details
 
-- **CPU**: MIPS 24KEc @ 580MHz (soft-float, 8-stage pipeline)
+- **CPU**: [MIPS 24KEc](https://www.mips.com/products/warrior/m-class-m5150/) @ 580MHz (soft-float, 8-stage pipeline)
 - **RAM**: 64MB DDR2
-- **Display**: 222×480 RGB565 via SPI (~20 FPS refresh limit)
+- **Display**: 222×480 [RGB565](https://en.wikipedia.org/wiki/High_color) via SPI (~20 FPS refresh limit)
 - **Input**: GPIO buttons via `/dev/input/event0`
 
 ### Rendering Limits (Increased for SIGIL and Complex WADs)
 
-The vanilla DOOM engine has hardcoded limits that can cause crashes on complex maps like SIGIL. These have been increased:
+The vanilla DOOM engine has [static limits](https://doomwiki.org/wiki/Static_limits) that can cause crashes on complex maps like SIGIL. These have been increased:
 
 | Limit | Original | Modified |
 |-------|----------|----------|
-| MAXVISPLANES | 128 | 512 |
-| MAXVISSPRITES | 128 | 256 |
-| MAXDRAWSEGS | 256 | 512 |
+| [MAXVISPLANES](https://doomwiki.org/wiki/Visplane) | 128 | 512 |
+| [MAXVISSPRITES](https://doomwiki.org/wiki/Sprite) | 128 | 256 |
+| [MAXDRAWSEGS](https://doomwiki.org/wiki/Drawseg) | 256 | 512 |
 
 ### Engine Modifications
 
@@ -171,7 +171,7 @@ The vanilla DOOM engine has hardcoded limits that can cause crashes on complex m
 - Precomputed lookup tables for X/Y scaling (32-byte cache-aligned)
 
 **Frame Pacing**
-- Default 35 FPS cap matches DOOM's native TICRATE
+- Default 35 FPS cap matches DOOM's native [TICRATE](https://doomwiki.org/wiki/Tic)
 - `usleep()`-based frame timing for consistent pacing
 - Reduces CPU usage and heat compared to uncapped rendering
 - Display limited to ~20 FPS via SPI, but 35 FPS ensures smooth game logic
@@ -243,6 +243,7 @@ All services are automatically restored when DOOM exits.
 
 ## Future Ideas
 
+- **[UMAPINFO](https://doomwiki.org/wiki/UMAPINFO) support** for SIGIL II compatibility
 - **Kernel module** (`doom_fb.ko`) for bypassing fbtft overhead and direct USB bulk transfers
 - **DMA transfers** for framebuffer writes (CH347 USB-to-SPI bridge currently lacks DMA)
 - **Dirty rectangle tracking** to only update changed screen regions
@@ -251,5 +252,6 @@ All services are automatically restored when DOOM exits.
 
 ## License
 
-- DOOM source: GPL
-- doom1.wad: Shareware (freely distributable)
+- [DOOM source code](https://github.com/id-Software/DOOM): GPL-2.0
+- [doomgeneric](https://github.com/ozkl/doomgeneric): GPL-2.0
+- `doom1.wad`: [Shareware](https://doomwiki.org/wiki/DOOM1.WAD) (freely distributable)
