@@ -42,8 +42,7 @@ Then find DOOM in: **Payloads → Games → DOOM**
 | | |
 |:---:|:---:|
 | ![DOOM](img/doom.png) | ![DOOM II](img/doom2-1.png) |
-| ![DOOM II](img/doom2-2.png) | ![Final DOOM: TNT](img/finaldoom-tnt-wad-1.png) |
-| ![Final DOOM: Plutonia](img/finaldoom-wad-4.png) | |
+| ![Final DOOM: Plutonia](img/plutonia-3.png) | ![Final DOOM: TNT](img/finaldoom-tnt-wad-1.png) |
 
 ### PWADs (Add-ons)
 

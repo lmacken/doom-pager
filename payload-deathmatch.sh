@@ -192,9 +192,6 @@ WAIT_FOR_INPUT >/dev/null 2>&1
 /etc/init.d/pineapplepager stop 2>/dev/null
 /etc/init.d/pineapd stop 2>/dev/null
 
-# Free cached memory
-echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
-
 sleep 1
 
 # Parse map format (E1M4 -> episode=1 map=4)

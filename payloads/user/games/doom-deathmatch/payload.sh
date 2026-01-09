@@ -15,6 +15,7 @@ DEFAULT_MAP="E1M1"
 DEFAULT_NOMONSTERS="yes"
 DEFAULT_TIMELIMIT="10"
 DEFAULT_SKILL="4"
+DEFAULT_PLAYER_NAME="Pager"
 
 # Load saved config or use defaults
 if [ -f "$CONFIG_FILE" ]; then
@@ -26,12 +27,14 @@ else
     NOMONSTERS="$DEFAULT_NOMONSTERS"
     TIMELIMIT="$DEFAULT_TIMELIMIT"
     SKILL="$DEFAULT_SKILL"
+    PLAYER_NAME="$DEFAULT_PLAYER_NAME"
 fi
 # Ensure defaults
 [ -z "$MAP" ] && MAP="$DEFAULT_MAP"
 [ -z "$NOMONSTERS" ] && NOMONSTERS="$DEFAULT_NOMONSTERS"
 [ -z "$TIMELIMIT" ] && TIMELIMIT="$DEFAULT_TIMELIMIT"
 [ -z "$SKILL" ] && SKILL="$DEFAULT_SKILL"
+[ -z "$PLAYER_NAME" ] && PLAYER_NAME="$DEFAULT_PLAYER_NAME"
 
 cd "$PAYLOAD_DIR" || {
     LOG red "ERROR: $PAYLOAD_DIR not found"
@@ -55,6 +58,7 @@ WAD_FILE=$(ls "$PAYLOAD_DIR"/*.wad 2>/dev/null | head -1)
 # Show current settings and offer to configure
 LOG "DOOM DEATHMATCH"
 LOG ""
+LOG "Player: $PLAYER_NAME"
 LOG "Server: $SERVER_IP:$SERVER_PORT"
 LOG "Map: $MAP  Skill: $SKILL  Timer: ${TIMELIMIT}m"
 [ "$NOMONSTERS" = "yes" ] && LOG "No Monsters: ON" || LOG "No Monsters: OFF"
@@ -65,6 +69,15 @@ sleep 2
 
 resp=$(CONFIRMATION_DIALOG "Change settings?")
 if [ "$resp" = "$DUCKYSCRIPT_USER_CONFIRMED" ]; then
+    # Get player name
+    new_name=$(TEXT_PICKER "Player Name" "$PLAYER_NAME")
+    case $? in
+        $DUCKYSCRIPT_CANCELLED|$DUCKYSCRIPT_REJECTED|$DUCKYSCRIPT_ERROR)
+            LOG "Cancelled"
+            exit 1
+            ;;
+    esac
+    
     # Get new IP
     new_ip=$(IP_PICKER "Server IP" "$SERVER_IP")
     case $? in
@@ -118,6 +131,7 @@ if [ "$resp" = "$DUCKYSCRIPT_USER_CONFIRMED" ]; then
             ;;
     esac
     
+    PLAYER_NAME="$new_name"
     SERVER_IP="$new_ip"
     SERVER_PORT="$new_port"
     MAP="$new_map"
@@ -126,7 +140,8 @@ if [ "$resp" = "$DUCKYSCRIPT_USER_CONFIRMED" ]; then
     SKILL="$new_skill"
     
     # Save config
-    echo "SERVER_IP=\"$SERVER_IP\"" > "$CONFIG_FILE"
+    echo "PLAYER_NAME=\"$PLAYER_NAME\"" > "$CONFIG_FILE"
+    echo "SERVER_IP=\"$SERVER_IP\"" >> "$CONFIG_FILE"
     echo "SERVER_PORT=\"$SERVER_PORT\"" >> "$CONFIG_FILE"
     echo "MAP=\"$MAP\"" >> "$CONFIG_FILE"
     echo "NOMONSTERS=\"$NOMONSTERS\"" >> "$CONFIG_FILE"
@@ -177,8 +192,6 @@ WAIT_FOR_INPUT >/dev/null 2>&1
 /etc/init.d/pineapplepager stop 2>/dev/null
 /etc/init.d/pineapd stop 2>/dev/null
 
-# Free cached memory
-echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
 
 sleep 1
 
@@ -196,8 +209,8 @@ EXTRA_ARGS=""
 [ "$TIMELIMIT" -gt 0 ] 2>/dev/null && EXTRA_ARGS="$EXTRA_ARGS -timer $TIMELIMIT"
 [ "$SKILL" -ge 1 ] && [ "$SKILL" -le 5 ] 2>/dev/null && EXTRA_ARGS="$EXTRA_ARGS -skill $SKILL"
 
-# Run DOOM with high priority for smoother gameplay
-"$PAYLOAD_DIR/doomgeneric" -iwad "$WAD_FILE" -connect "$SERVER_IP:$SERVER_PORT" -warp "$EPISODE" "$MAP_NUM" $EXTRA_ARGS >/tmp/doom.log 2>&1
+# Run DOOM
+"$PAYLOAD_DIR/doomgeneric" -iwad "$WAD_FILE" -name "$PLAYER_NAME" -connect "$SERVER_IP:$SERVER_PORT" -warp "$EPISODE" "$MAP_NUM" $EXTRA_ARGS >/tmp/doom.log 2>&1
 
 # Restore services after DOOM exits
 /etc/init.d/php8-fpm start 2>/dev/null &

@@ -44,10 +44,6 @@ WAIT_FOR_INPUT >/dev/null 2>&1
 /etc/init.d/pineapplepager stop 2>/dev/null
 /etc/init.d/pineapd stop 2>/dev/null
 
-# Free cached memory
-echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
-
-# Small delay to let services fully stop
 sleep 1
 
 # Run DOOM
