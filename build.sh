@@ -227,6 +227,40 @@ sleep 1
 /etc/init.d/pineapplepager start 2>/dev/null &
 /etc/init.d/pineapd start 2>/dev/null &
 DEVPAYLOAD
+    elif [ "$USE_LOCAL_SOURCE" = "1" ]; then
+        # Local build: create simple payload with LOCAL title
+        cat > "$RELEASE_DIR/payload.sh" << 'LOCALPAYLOAD'
+#!/bin/bash
+# Title: DOOM LOCAL
+# Description: Local dev build for testing
+# Author: @lmacken
+# Version: local
+# Category: Games
+
+PAYLOAD_DIR="/root/payloads/user/games/doom-local"
+cd "$PAYLOAD_DIR" || exit 1
+chmod +x ./doomgeneric
+
+LOG "DOOM LOCAL (dev build)"
+LOG "Press any button..."
+WAIT_FOR_INPUT >/dev/null 2>&1
+
+/etc/init.d/php8-fpm stop 2>/dev/null
+/etc/init.d/nginx stop 2>/dev/null
+/etc/init.d/bluetoothd stop 2>/dev/null
+/etc/init.d/pineapplepager stop 2>/dev/null
+/etc/init.d/pineapd stop 2>/dev/null
+echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
+sleep 1
+
+./doomgeneric -iwad "$PAYLOAD_DIR/doom1.wad" >/tmp/doom.log 2>&1
+
+/etc/init.d/php8-fpm start 2>/dev/null &
+/etc/init.d/nginx start 2>/dev/null &
+/etc/init.d/bluetoothd start 2>/dev/null &
+/etc/init.d/pineapplepager start 2>/dev/null &
+/etc/init.d/pineapd start 2>/dev/null &
+LOCALPAYLOAD
     else
         cp "$SCRIPT_DIR/payload.sh" "$RELEASE_DIR/"
     fi
