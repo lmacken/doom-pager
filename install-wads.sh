@@ -386,9 +386,13 @@ LOG ""
 LOG "Press any button..."
 WAIT_FOR_INPUT >/dev/null 2>&1
 
-# Stop the Pager UI
+# Stop services to free CPU and memory for DOOM
+/etc/init.d/php8-fpm stop 2>/dev/null
+/etc/init.d/nginx stop 2>/dev/null
+/etc/init.d/bluetoothd stop 2>/dev/null
 /etc/init.d/pineapplepager stop 2>/dev/null
 /etc/init.d/pineapd stop 2>/dev/null
+echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
 
 sleep 1
 
@@ -409,7 +413,10 @@ PAYLOAD
 # Run DOOM
 eval "$PAYLOAD_DIR/doomgeneric $DOOM_ARGS" >/tmp/doom.log 2>&1
 
-# Restore Pager UI
+# Restore services after DOOM exits
+/etc/init.d/php8-fpm start 2>/dev/null &
+/etc/init.d/nginx start 2>/dev/null &
+/etc/init.d/bluetoothd start 2>/dev/null &
 /etc/init.d/pineapplepager start 2>/dev/null &
 /etc/init.d/pineapd start 2>/dev/null &
 
