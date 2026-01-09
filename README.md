@@ -19,7 +19,7 @@ Copy the pre-built files to your Pager:
 scp -r payloads/user/games/doom root@172.16.52.1:/root/payloads/user/games/
 ```
 
-Then find DOOM in: **Payloads → User → Games → DOOM**
+Then find DOOM in: **Payloads → Games → DOOM**
 
 ## Supported WADs
 
@@ -99,7 +99,7 @@ Connect to our public DOOM server for multiplayer deathmatch!
 |:---:|:---:|
 | ![Deathmatch Lobby](img/deathmatch.png) | ![Deathmatch Gameplay](img/deathmatch-1.png) |
 
-Run the **DOOM Deathmatch** payload from: Payloads → User → Games
+Run the **DOOM Deathmatch** payload from: Payloads → Games
 
 Desktop players can join with Chocolate Doom:
 ```bash
@@ -147,8 +147,9 @@ Capture a screenshot from your Pager's framebuffer and save it locally:
 
 ## Technical Details
 
-- **CPU**: MIPS 24KEc @ 580MHz (soft-float)
-- **Display**: 222×480 RGB565, rotated 90° CCW
+- **CPU**: MIPS 24KEc @ 580MHz (soft-float, 8-stage pipeline)
+- **RAM**: 64MB DDR2
+- **Display**: 222×480 RGB565 via SPI (~20 FPS refresh limit)
 - **Input**: GPIO buttons via `/dev/input/event0`
 
 ### Rendering Limits (Increased for SIGIL and Complex WADs)
@@ -163,22 +164,64 @@ The vanilla DOOM engine has hardcoded limits that can cause crashes on complex m
 
 ### Engine Modifications
 
-**Display**
-- 16-bit RGB565 framebuffer support
-- 90° CCW rotation for portrait display
+**Display Pipeline**
+- 16-bit RGB565 framebuffer support with direct writes
+- 90° CCW rotation for portrait display orientation
 - Full-screen stretched scaling with widened FOV (gameplay)
 - Aspect-correct rendering with letterboxing (menus/title)
-- Precomputed lookup tables for fast scaling
+- Precomputed lookup tables for X/Y scaling (32-byte cache-aligned)
 
-**Input**
+**Frame Pacing**
+- Default 35 FPS cap matches DOOM's native TICRATE
+- `usleep()`-based frame timing for consistent pacing
+- Reduces CPU usage and heat compared to uncapped rendering
+- Display limited to ~20 FPS via SPI, but 35 FPS ensures smooth game logic
+
+**Input System**
 - GPIO button mapping (red/green buttons)
-- Button combo detection (ESC, Use, Strafe, Automap)
+- Button combo detection with proper state tracking
+- Strafe combos: Green+Left/Right for strafing
+- Clean key release handling prevents stuck inputs
+- USB keyboard support (detected at startup)
 
-**Performance**
-- MIPS 24KEc optimizations (`-march=24kec -mdsp -mbranch-likely`)
-- 4-pixel loop unrolling in render loop
-- Inline RGB888→RGB565 conversion macro
-- Aggressive compiler flags (`-O3 -ffast-math -funroll-loops`)
+**Performance Optimizations**
+
+| Optimization | Description |
+|--------------|-------------|
+| **RGB565 Palette Precomputation** | 256-entry palette converted to RGB565 once at load time, not per-pixel |
+| **4-Pixel Loop Unrolling** | Inner render loop processes 4 pixels per iteration |
+| **Direct I_VideoBuffer Access** | Skips redundant buffer copy in `I_FinishUpdate()` |
+| **Cache-Aligned Tables** | Lookup tables aligned to 32-byte cache lines via `posix_memalign()` |
+| **Binary Stripping** | Debug symbols removed (758KB vs 1.4MB) |
+
+**Compiler Flags (MIPS 24KEc Tuned)**
+```
+-O3 -march=24kec -mtune=24kec -mdsp -mbranch-likely
+-fomit-frame-pointer -ffast-math -funroll-loops
+-fno-strict-aliasing -fno-exceptions
+```
+
+**Experimental: Cache Prefetch**
+
+The `-prefetch` flag enables `__builtin_prefetch()` hints for the MIPS 24KEc's L1 cache:
+- Prefetches next row's lookup table entry during scaling
+- Prefetches ahead in source buffer (16 pixels)
+- May improve performance on some WADs, disabled by default
+
+### Payload Optimizations
+
+The payload scripts stop background services before launching DOOM to maximize available CPU and RAM:
+
+```bash
+# Services stopped during gameplay
+/etc/init.d/php8-fpm stop    # PHP FastCGI
+/etc/init.d/nginx stop        # Web server  
+/etc/init.d/bluetoothd stop   # Bluetooth daemon
+/etc/init.d/pineapplepager stop
+/etc/init.d/pineapd stop
+```
+
+All services are automatically restored when DOOM exits.
 
 ## Files
 
@@ -201,9 +244,11 @@ The vanilla DOOM engine has hardcoded limits that can cause crashes on complex m
 
 ## Future Ideas
 
-- Further rendering optimizations
-- Vibrate when hit
-- DOOM theme ringtone using the piezoelectric buzzer
+- **Kernel module** (`doom_fb.ko`) for bypassing fbtft overhead and direct USB bulk transfers
+- **DMA transfers** for framebuffer writes (CH347 USB-to-SPI bridge currently lacks DMA)
+- **Dirty rectangle tracking** to only update changed screen regions
+- **Vibrate when hit** using the Pager's vibration motor
+- **DOOM theme ringtone** using the piezoelectric buzzer
 
 ## License
 
