@@ -194,9 +194,8 @@ Supported PWADs:
   sigil.wad        - SIGIL (requires doom.wad) - uses SIGIL_COMPAT version
 
 Notes:
-  - BFG/Unity Edition WADs fully supported
   - SIGIL uses the "compat" version which replaces Episode 3
-  - SIGIL II is NOT compatible (Episode 6 music lumps cause crashes)
+  - SIGIL II is NOT compatible (requires UMAPINFO support)
 EOF
 }
 
@@ -407,7 +406,7 @@ PAYLOAD
     # Complete the payload script
     cat >> "$payload_dir/payload.sh" << 'PAYLOAD'
 
-# Run DOOM!
+# Run DOOM
 eval "$PAYLOAD_DIR/doomgeneric $DOOM_ARGS" >/tmp/doom.log 2>&1
 
 # Restore Pager UI

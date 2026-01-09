@@ -5,8 +5,10 @@
 # Options:
 #   --rotate, -r    Rotate 90° CW to show as DOOM renders it (landscape)
 #   --no-rotate     Keep as displayed on Pager (portrait, default)
+#
+# Default: timestamped filename for quick repeated captures
 
-OUTPUT="pager_screenshot.png"
+OUTPUT="pager_$(date +%Y%m%d_%H%M%S).png"
 ROTATE=1  # Default: rotate to landscape
 PAGER_IP="${PAGER_IP:-172.16.52.1}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519}"

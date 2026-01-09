@@ -190,7 +190,7 @@ EXTRA_ARGS=""
 [ "$TIMELIMIT" -gt 0 ] 2>/dev/null && EXTRA_ARGS="$EXTRA_ARGS -timer $TIMELIMIT"
 [ "$SKILL" -ge 1 ] && [ "$SKILL" -le 5 ] 2>/dev/null && EXTRA_ARGS="$EXTRA_ARGS -skill $SKILL"
 
-# Run DOOM!
+# Run DOOM with high priority for smoother gameplay
 "$PAYLOAD_DIR/doomgeneric" -iwad "$WAD_FILE" -connect "$SERVER_IP:$SERVER_PORT" -warp "$EPISODE" "$MAP_NUM" $EXTRA_ARGS >/tmp/doom.log 2>&1
 
 # Restore Pager UI

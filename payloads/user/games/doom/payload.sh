@@ -44,7 +44,7 @@ WAIT_FOR_INPUT >/dev/null 2>&1
 # Small delay to let services fully stop
 sleep 1
 
-# Run DOOM in single-player mode
+# Run DOOM with high priority for smoother gameplay
 "$PAYLOAD_DIR/doomgeneric" -iwad "$WAD_FILE" >/tmp/doom.log 2>&1
 
 # Restore the Pager UI after DOOM exits

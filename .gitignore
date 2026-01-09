@@ -32,3 +32,30 @@ wads/*.WAD
 payloads/user/games/*/*.wad
 payloads/user/games/*/*.WAD
 wads.old/
+
+# Local/dev build directories (for testing, not shipped)
+payloads/user/games/doom-local/
+payloads/user/games/doom-dev/
+payloads/user/games/doom-sigil-local/
+payloads/user/games/doom-deathmatch-local/
+payloads/user/games/doom2-master-local/
+
+# Extra WAD payloads (user installs via install-wads.sh)
+payloads/user/games/doom-plutonia/
+payloads/user/games/doom-tnt/
+payloads/user/games/doom2-master/
+payloads/user/games/doom-deathmatch/deathmatch/
+
+# Research clones
+research/
+
+# Backups
+backups/
+
+# Screenshots
+pager_*.png
+plutonia-*.png
+
+# Temp/misc
+markdown_content.md
+img/
