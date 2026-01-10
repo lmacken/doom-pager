@@ -223,21 +223,20 @@ LOG "Red+Green=Quit"
 LOG ""
 
 case "$CONNECTION_MODE" in
-    automatch)
-        LOG "Auto-matching to best server..."
-        ;;
-    browse)
-        LOG "Opening server browser..."
-        ;;
-    direct)
-        LOG "Connecting to $SERVER_IP:$SERVER_PORT..."
-        ;;
+automatch)
+  LOG "Auto-matching to best server..."
+  ;;
+browse)
+  LOG "Opening server browser..."
+  ;;
+direct)
+  LOG "Connecting to $SERVER_IP:$SERVER_PORT..."
+  ;;
 esac
 
 LOG ""
 LOG "Press any button to start..."
 WAIT_FOR_INPUT >/dev/null 2>&1
-LOG ""
 LOG "LOADING..."
 
 # Stop services to free CPU and memory for DOOM

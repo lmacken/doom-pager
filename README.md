@@ -197,6 +197,7 @@ The vanilla DOOM engine has [static limits](https://doomwiki.org/wiki/Static_lim
 | **4-Pixel Loop Unrolling** | Inner render loop processes 4 pixels per iteration |
 | **Direct I_VideoBuffer Access** | Skips redundant buffer copy in `I_FinishUpdate()` |
 | **Cache-Aligned Tables** | Lookup tables aligned to 32-byte cache lines via `posix_memalign()` |
+| **Cache Prefetch** | `__builtin_prefetch()` for L1 cache - prefetches next row and 16 pixels ahead (use `-noprefetch` to disable) |
 | **Binary Stripping** | Debug symbols removed (758KB vs 1.4MB) |
 
 **Compiler Flags (MIPS 24KEc Tuned)**
@@ -205,13 +206,6 @@ The vanilla DOOM engine has [static limits](https://doomwiki.org/wiki/Static_lim
 -fomit-frame-pointer -ffast-math -funroll-loops
 -fno-strict-aliasing -fno-exceptions
 ```
-
-**Experimental: Cache Prefetch**
-
-The `-prefetch` flag enables `__builtin_prefetch()` hints for the MIPS 24KEc's L1 cache:
-- Prefetches next row's lookup table entry during scaling
-- Prefetches ahead in source buffer (16 pixels)
-- May improve performance on some WADs, enabled by default, can be disabled with `-noprefetch`
 
 ### Payload Optimizations
 

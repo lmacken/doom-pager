@@ -36,7 +36,6 @@ LOG "Red+Green=Quit"
 LOG ""
 LOG "Press any button to start..."
 WAIT_FOR_INPUT >/dev/null 2>&1
-LOG ""
 LOG "LOADING..."
 
 # Stop services to free CPU and memory for DOOM

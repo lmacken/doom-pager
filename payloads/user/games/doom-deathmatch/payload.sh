@@ -203,9 +203,7 @@ if [ "$CONNECTION_MODE" = "direct" ]; then
         LOG red "ERROR: Cannot reach $SERVER_IP"
         LOG red "Server may be offline or"
         LOG red "check your WiFi connection"
-        LOG ""
-        LOG "Press any button..."
-        WAIT_FOR_INPUT >/dev/null 2>&1
+        ALERT "Server unreachable. Press any button..."
         exit 1
     fi
     
