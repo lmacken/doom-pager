@@ -16,7 +16,7 @@ DEFAULT_NOMONSTERS="yes"
 DEFAULT_TIMELIMIT="10"
 DEFAULT_SKILL="4"
 DEFAULT_PLAYER_NAME="Pager"
-DEFAULT_CONNECTION_MODE="automatch"  # automatch, browse, or direct
+DEFAULT_CONNECTION_MODE="automatch" # automatch, browse, or direct
 
 # Note: In automatch/browse modes, the game will automatically discover
 # all servers by scanning sequential ports (2342, 2343, 2344, ...)
@@ -25,16 +25,16 @@ DEFAULT_CONNECTION_MODE="automatch"  # automatch, browse, or direct
 
 # Load saved config or use defaults
 if [ -f "$CONFIG_FILE" ]; then
-    source "$CONFIG_FILE"
+  source "$CONFIG_FILE"
 else
-    SERVER_IP="$DEFAULT_SERVER_IP"
-    SERVER_PORT="$DEFAULT_SERVER_PORT"
-    MAP="$DEFAULT_MAP"
-    NOMONSTERS="$DEFAULT_NOMONSTERS"
-    TIMELIMIT="$DEFAULT_TIMELIMIT"
-    SKILL="$DEFAULT_SKILL"
-    PLAYER_NAME="$DEFAULT_PLAYER_NAME"
-    CONNECTION_MODE="$DEFAULT_CONNECTION_MODE"
+  SERVER_IP="$DEFAULT_SERVER_IP"
+  SERVER_PORT="$DEFAULT_SERVER_PORT"
+  MAP="$DEFAULT_MAP"
+  NOMONSTERS="$DEFAULT_NOMONSTERS"
+  TIMELIMIT="$DEFAULT_TIMELIMIT"
+  SKILL="$DEFAULT_SKILL"
+  PLAYER_NAME="$DEFAULT_PLAYER_NAME"
+  CONNECTION_MODE="$DEFAULT_CONNECTION_MODE"
 fi
 
 # Ensure defaults
@@ -46,32 +46,32 @@ fi
 [ -z "$CONNECTION_MODE" ] && CONNECTION_MODE="$DEFAULT_CONNECTION_MODE"
 
 cd "$PAYLOAD_DIR" || {
-    LOG red "ERROR: $PAYLOAD_DIR not found"
-    exit 1
+  LOG red "ERROR: $PAYLOAD_DIR not found"
+  exit 1
 }
 
 # Verify required files exist
 [ ! -f "./doomgeneric" ] && {
-    LOG red "ERROR: doomgeneric not found"
-    exit 1
+  LOG red "ERROR: doomgeneric not found"
+  exit 1
 }
 chmod +x ./doomgeneric
 
 # Find any WAD file
 WAD_FILE=$(ls "$PAYLOAD_DIR"/*.wad 2>/dev/null | head -1)
 [ -z "$WAD_FILE" ] && {
-    LOG red "ERROR: No .wad file found"
-    exit 1
+  LOG red "ERROR: No .wad file found"
+  exit 1
 }
 
 # Display current mode
 mode_display() {
-    case "$CONNECTION_MODE" in
-        automatch) echo "Auto-Match" ;;
-        browse) echo "Server Browser" ;;
-        direct) echo "Direct Connect" ;;
-        *) echo "Auto-Match" ;;
-    esac
+  case "$CONNECTION_MODE" in
+  automatch) echo "Auto-Match" ;;
+  browse) echo "Server Browser" ;;
+  direct) echo "Direct Connect" ;;
+  *) echo "Auto-Match" ;;
+  esac
 }
 
 # Show current settings
@@ -80,7 +80,7 @@ LOG ""
 LOG "Player: $PLAYER_NAME"
 LOG "Mode: $(mode_display)"
 if [ "$CONNECTION_MODE" = "direct" ]; then
-    LOG "Server: $SERVER_IP:$SERVER_PORT"
+  LOG "Server: $SERVER_IP:$SERVER_PORT"
 fi
 LOG "Map: $MAP  Skill: $SKILL  Timer: ${TIMELIMIT}m"
 [ "$NOMONSTERS" = "yes" ] && LOG "No Monsters: ON" || LOG "No Monsters: OFF"
@@ -92,95 +92,95 @@ sleep 2
 # Ask to change settings
 resp=$(CONFIRMATION_DIALOG "Change settings?")
 if [ "$resp" = "$DUCKYSCRIPT_USER_CONFIRMED" ]; then
-    
-    # Connection mode selection
-    mode_choice=$(NUMBER_PICKER "1=Auto 2=Browse 3=IP" "1")
+
+  # Connection mode selection
+  mode_choice=$(NUMBER_PICKER "1=Auto 2=Browse 3=IP" "1")
+  case $? in
+  $DUCKYSCRIPT_CANCELLED | $DUCKYSCRIPT_REJECTED | $DUCKYSCRIPT_ERROR)
+    LOG "Cancelled"
+    exit 1
+    ;;
+  esac
+
+  case "$mode_choice" in
+  1) CONNECTION_MODE="automatch" ;;
+  2) CONNECTION_MODE="browse" ;;
+  3) CONNECTION_MODE="direct" ;;
+  *) CONNECTION_MODE="automatch" ;;
+  esac
+
+  # Get player name
+  new_name=$(TEXT_PICKER "Player Name" "$PLAYER_NAME")
+  case $? in
+  $DUCKYSCRIPT_CANCELLED | $DUCKYSCRIPT_REJECTED | $DUCKYSCRIPT_ERROR)
+    LOG "Cancelled"
+    exit 1
+    ;;
+  esac
+  PLAYER_NAME="$new_name"
+
+  # Only ask for IP/port in direct mode
+  if [ "$CONNECTION_MODE" = "direct" ]; then
+    new_ip=$(IP_PICKER "Server IP" "$SERVER_IP")
     case $? in
-        $DUCKYSCRIPT_CANCELLED|$DUCKYSCRIPT_REJECTED|$DUCKYSCRIPT_ERROR)
-            LOG "Cancelled"
-            exit 1
-            ;;
+    $DUCKYSCRIPT_CANCELLED | $DUCKYSCRIPT_REJECTED | $DUCKYSCRIPT_ERROR)
+      LOG "Cancelled"
+      exit 1
+      ;;
     esac
-    
-    case "$mode_choice" in
-        1) CONNECTION_MODE="automatch" ;;
-        2) CONNECTION_MODE="browse" ;;
-        3) CONNECTION_MODE="direct" ;;
-        *) CONNECTION_MODE="automatch" ;;
-    esac
-    
-    # Get player name
-    new_name=$(TEXT_PICKER "Player Name" "$PLAYER_NAME")
+
+    new_port=$(NUMBER_PICKER "Server Port" "$SERVER_PORT")
     case $? in
-        $DUCKYSCRIPT_CANCELLED|$DUCKYSCRIPT_REJECTED|$DUCKYSCRIPT_ERROR)
-            LOG "Cancelled"
-            exit 1
-            ;;
+    $DUCKYSCRIPT_CANCELLED | $DUCKYSCRIPT_REJECTED | $DUCKYSCRIPT_ERROR)
+      LOG "Cancelled"
+      exit 1
+      ;;
     esac
-    PLAYER_NAME="$new_name"
-    
-    # Only ask for IP/port in direct mode
-    if [ "$CONNECTION_MODE" = "direct" ]; then
-        new_ip=$(IP_PICKER "Server IP" "$SERVER_IP")
-        case $? in
-            $DUCKYSCRIPT_CANCELLED|$DUCKYSCRIPT_REJECTED|$DUCKYSCRIPT_ERROR)
-                LOG "Cancelled"
-                exit 1
-                ;;
-        esac
-        
-        new_port=$(NUMBER_PICKER "Server Port" "$SERVER_PORT")
-        case $? in
-            $DUCKYSCRIPT_CANCELLED|$DUCKYSCRIPT_REJECTED|$DUCKYSCRIPT_ERROR)
-                LOG "Cancelled"
-                exit 1
-                ;;
-        esac
-        
-        SERVER_IP="$new_ip"
-        SERVER_PORT="$new_port"
-    fi
-    
-    # Get map (E1M1-E1M9 for shareware)
-    new_map=$(TEXT_PICKER "Map (E1M1-E1M9)" "$MAP")
-    case $? in
-        $DUCKYSCRIPT_CANCELLED|$DUCKYSCRIPT_REJECTED|$DUCKYSCRIPT_ERROR)
-            LOG "Cancelled"
-            exit 1
-            ;;
-    esac
-    MAP="$new_map"
-    
-    # No monsters toggle
-    monsters_resp=$(CONFIRMATION_DIALOG "No Monsters?")
-    if [ "$monsters_resp" = "$DUCKYSCRIPT_USER_CONFIRMED" ]; then
-        NOMONSTERS="yes"
-    else
-        NOMONSTERS="no"
-    fi
-    
-    # Time limit
-    new_timelimit=$(NUMBER_PICKER "Time Limit (min)" "$TIMELIMIT")
-    case $? in
-        $DUCKYSCRIPT_CANCELLED|$DUCKYSCRIPT_REJECTED|$DUCKYSCRIPT_ERROR)
-            LOG "Cancelled"
-            exit 1
-            ;;
-    esac
-    TIMELIMIT="$new_timelimit"
-    
-    # Skill level
-    new_skill=$(NUMBER_PICKER "Skill (1-5)" "$SKILL")
-    case $? in
-        $DUCKYSCRIPT_CANCELLED|$DUCKYSCRIPT_REJECTED|$DUCKYSCRIPT_ERROR)
-            LOG "Cancelled"
-            exit 1
-            ;;
-    esac
-    SKILL="$new_skill"
-    
-    # Save config
-    cat > "$CONFIG_FILE" <<EOF
+
+    SERVER_IP="$new_ip"
+    SERVER_PORT="$new_port"
+  fi
+
+  # Get map (E1M1-E1M9 for shareware)
+  new_map=$(TEXT_PICKER "Map (E1M1-E1M9)" "$MAP")
+  case $? in
+  $DUCKYSCRIPT_CANCELLED | $DUCKYSCRIPT_REJECTED | $DUCKYSCRIPT_ERROR)
+    LOG "Cancelled"
+    exit 1
+    ;;
+  esac
+  MAP="$new_map"
+
+  # No monsters toggle
+  monsters_resp=$(CONFIRMATION_DIALOG "No Monsters?")
+  if [ "$monsters_resp" = "$DUCKYSCRIPT_USER_CONFIRMED" ]; then
+    NOMONSTERS="yes"
+  else
+    NOMONSTERS="no"
+  fi
+
+  # Time limit
+  new_timelimit=$(NUMBER_PICKER "Time Limit (min)" "$TIMELIMIT")
+  case $? in
+  $DUCKYSCRIPT_CANCELLED | $DUCKYSCRIPT_REJECTED | $DUCKYSCRIPT_ERROR)
+    LOG "Cancelled"
+    exit 1
+    ;;
+  esac
+  TIMELIMIT="$new_timelimit"
+
+  # Skill level
+  new_skill=$(NUMBER_PICKER "Skill (1-5)" "$SKILL")
+  case $? in
+  $DUCKYSCRIPT_CANCELLED | $DUCKYSCRIPT_REJECTED | $DUCKYSCRIPT_ERROR)
+    LOG "Cancelled"
+    exit 1
+    ;;
+  esac
+  SKILL="$new_skill"
+
+  # Save config
+  cat >"$CONFIG_FILE" <<EOF
 PLAYER_NAME="$PLAYER_NAME"
 SERVER_IP="$SERVER_IP"
 SERVER_PORT="$SERVER_PORT"
@@ -190,28 +190,28 @@ TIMELIMIT="$TIMELIMIT"
 SKILL="$SKILL"
 CONNECTION_MODE="$CONNECTION_MODE"
 EOF
-    
-    LOG "Settings saved!"
+
+  LOG "Settings saved!"
 fi
 
 # Connectivity check for direct mode only
 if [ "$CONNECTION_MODE" = "direct" ]; then
-    LOG ""
-    LOG "Testing $SERVER_IP..."
-    
-    if ! ping -c 1 -W 3 "$SERVER_IP" >/dev/null 2>&1; then
-        LOG red "ERROR: Cannot reach $SERVER_IP"
-        LOG red "Server may be offline or"
-        LOG red "check your WiFi connection"
-        ALERT "Server unreachable. Press any button..."
-        exit 1
-    fi
-    
-    if (echo -n "" > /dev/udp/"$SERVER_IP"/"$SERVER_PORT") 2>/dev/null; then
-        LOG green "Server reachable!"
-    else
-        LOG yellow "Host reachable (UDP untested)"
-    fi
+  LOG ""
+  LOG "Testing $SERVER_IP..."
+
+  if ! ping -c 1 -W 3 "$SERVER_IP" >/dev/null 2>&1; then
+    LOG red "ERROR: Cannot reach $SERVER_IP"
+    LOG red "Server may be offline or"
+    LOG red "check your WiFi connection"
+    ALERT "Server unreachable. Press any button..."
+    exit 1
+  fi
+
+  if (echo -n "" >/dev/udp/"$SERVER_IP"/"$SERVER_PORT") 2>/dev/null; then
+    LOG green "Server reachable!"
+  else
+    LOG yellow "Host reachable (UDP untested)"
+  fi
 fi
 
 # Display controls
@@ -264,18 +264,18 @@ BASE_ARGS="-iwad $WAD_FILE -name $PLAYER_NAME -warp $EPISODE $MAP_NUM -deathmatc
 
 # Build connection args based on mode
 case "$CONNECTION_MODE" in
-    automatch)
-        CONN_ARGS="-automatch"
-        ;;
-    browse)
-        CONN_ARGS="-browse"
-        ;;
-    direct)
-        CONN_ARGS="-connect $SERVER_IP:$SERVER_PORT"
-        ;;
-    *)
-        CONN_ARGS="-automatch"
-        ;;
+automatch)
+  CONN_ARGS="-automatch"
+  ;;
+browse)
+  CONN_ARGS="-browse"
+  ;;
+direct)
+  CONN_ARGS="-connect $SERVER_IP:$SERVER_PORT"
+  ;;
+*)
+  CONN_ARGS="-automatch"
+  ;;
 esac
 
 # Run DOOM

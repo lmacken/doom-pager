@@ -186,7 +186,6 @@ The vanilla DOOM engine has [static limits](https://doomwiki.org/wiki/Static_lim
 - GPIO button mapping (red/green buttons)
 - Button combo detection with proper state tracking
 - Strafe combos: Green+Left/Right for strafing
-- Clean key release handling prevents stuck inputs
 - USB keyboard support (detected at startup)
 
 **Performance Optimizations**

@@ -34,8 +34,9 @@ QUERY_TIMEOUT = 1.0  # seconds
 
 def send_query(sock, addr):
     """Send a query packet to a server."""
-    # Query packet is just the packet type as uint16 little-endian
-    packet = struct.pack('<H', NET_PACKET_TYPE_QUERY)
+    # Query packet is just the packet type as uint16 big-endian
+    # (Chocolate Doom uses big-endian for network packets)
+    packet = struct.pack('>H', NET_PACKET_TYPE_QUERY)
     sock.sendto(packet, addr)
 
 
@@ -52,8 +53,8 @@ def parse_response(data):
     if len(data) < 8:
         return None
     
-    # Read packet type (uint16 little-endian)
-    packet_type = struct.unpack('<H', data[0:2])[0]
+    # Read packet type (uint16 big-endian)
+    packet_type = struct.unpack('>H', data[0:2])[0]
     if packet_type != NET_PACKET_TYPE_QUERY_RESPONSE:
         return None
     
