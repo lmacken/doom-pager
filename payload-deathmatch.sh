@@ -203,9 +203,7 @@ if [ "$CONNECTION_MODE" = "direct" ]; then
         LOG red "ERROR: Cannot reach $SERVER_IP"
         LOG red "Server may be offline or"
         LOG red "check your WiFi connection"
-        LOG ""
-        LOG "Press any button..."
-        WAIT_FOR_INPUT >/dev/null 2>&1
+        ALERT "Server unreachable. Press any button..."
         exit 1
     fi
     
@@ -239,6 +237,8 @@ esac
 LOG ""
 LOG "Press any button to start..."
 WAIT_FOR_INPUT >/dev/null 2>&1
+LOG ""
+LOG "LOADING..."
 
 # Stop services to free CPU and memory for DOOM
 /etc/init.d/php8-fpm stop 2>/dev/null
