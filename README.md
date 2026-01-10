@@ -92,13 +92,23 @@ External USB keyboards work alongside the Pager's built-in buttons. **Plug in yo
 
 ## Multiplayer Deathmatch
 
-Connect to our public DOOM server for multiplayer deathmatch!
+Connect to our public DOOM servers for multiplayer deathmatch!
+
+| | | |
+|:---:|:---:|:---:|
+| ![Deathmatch Options](img/pager-deathmatch-options.png) | ![Server Browser](img/pager-lobby-browser.png) | ![Lobby](img/pager-lobby.png) |
+| **Connection Options** | **Server Browser** | **Waiting in Lobby** |
 
 | | |
 |:---:|:---:|
 | ![Deathmatch Lobby](img/deathmatch.png) | ![Deathmatch Gameplay](img/deathmatch-1.png) |
 
 Run the **DOOM Deathmatch** payload from: Payloads → Games
+
+**Connection Modes:**
+- **Auto** - Instant matchmaking to best available server
+- **Browse** - Manual server selection with real-time status
+- **Direct** - Connect to specific IP:port
 
 Desktop players can join with [Chocolate Doom](https://www.chocolate-doom.org/):
 ```bash
