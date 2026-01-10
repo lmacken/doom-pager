@@ -211,7 +211,7 @@ The vanilla DOOM engine has [static limits](https://doomwiki.org/wiki/Static_lim
 The `-prefetch` flag enables `__builtin_prefetch()` hints for the MIPS 24KEc's L1 cache:
 - Prefetches next row's lookup table entry during scaling
 - Prefetches ahead in source buffer (16 pixels)
-- May improve performance on some WADs, disabled by default
+- May improve performance on some WADs, enabled by default, can be disabled with `-noprefetch`
 
 ### Payload Optimizations
 
