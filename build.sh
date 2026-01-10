@@ -53,7 +53,7 @@ done
 # Override settings based on build type
 if [ "$USE_LOCAL_SOURCE" = "1" ]; then
     RELEASE_DIR="$SCRIPT_DIR/payloads/user/games/doom-local"
-    RELEASE_DIR_DM=""  # No deathmatch for local builds
+    RELEASE_DIR_DM="$SCRIPT_DIR/payloads/user/games/doom-deathmatch-local"
     echo "*** LOCAL BUILD - using ./doomgeneric/ ***"
 elif [ "$USE_DEV_BRANCH" = "1" ]; then
     DOOMGENERIC_BRANCH="dev"
@@ -281,15 +281,25 @@ LOCALPAYLOAD
     echo "Release: $RELEASE_DIR"
     ls -lh "$RELEASE_DIR"
     
-    # Deathmatch: doom-deathmatch/ (symlinks to ../doom/ to save space)
-    # Skip for dev builds
+    # Deathmatch variant
     if [ -n "$RELEASE_DIR_DM" ]; then
         mkdir -p "$RELEASE_DIR_DM"
         rm -f "$RELEASE_DIR_DM/doomgeneric" "$RELEASE_DIR_DM/doom1.wad"
-        ln -s ../doom/doomgeneric "$RELEASE_DIR_DM/doomgeneric"
-        ln -s ../doom/doom1.wad "$RELEASE_DIR_DM/doom1.wad"
-        sed 's|/user/games/doom"|/user/games/doom-deathmatch"|g' \
-            "$SCRIPT_DIR/payload-deathmatch.sh" > "$RELEASE_DIR_DM/payload.sh"
+        
+        if [ "$USE_LOCAL_SOURCE" = "1" ]; then
+            # Local build: copy files (different directory structure)
+            cp "$BINARY" "$RELEASE_DIR_DM/"
+            cp "$WAD" "$RELEASE_DIR_DM/"
+            sed -e 's|/user/games/doom-deathmatch|/user/games/doom-deathmatch-local|g' \
+                -e 's|# Title: DOOM Deathmatch$|# Title: DOOM Deathmatch LOCAL|' \
+                "$SCRIPT_DIR/payload-deathmatch.sh" > "$RELEASE_DIR_DM/payload.sh"
+        else
+            # Normal build: symlinks to ../doom/ to save space
+            ln -s ../doom/doomgeneric "$RELEASE_DIR_DM/doomgeneric"
+            ln -s ../doom/doom1.wad "$RELEASE_DIR_DM/doom1.wad"
+            sed 's|/user/games/doom"|/user/games/doom-deathmatch"|g' \
+                "$SCRIPT_DIR/payload-deathmatch.sh" > "$RELEASE_DIR_DM/payload.sh"
+        fi
         chmod +x "$RELEASE_DIR_DM/payload.sh"
         (cd "$RELEASE_DIR_DM" && sha256sum payload.sh > SHA256SUMS)
         echo ""
@@ -307,13 +317,19 @@ if [ "$SKIP_DEPLOY" = "0" ]; then
     echo "[6/6] Deploying to $PAGER..."
     
     if [ "$USE_LOCAL_SOURCE" = "1" ]; then
-        # Local build: deploy to doom-local/
-        ssh "$PAGER" "mkdir -p $DEST/doom-local" 2>/dev/null || { echo "Cannot connect to $PAGER"; exit 1; }
+        # Local build: deploy to doom-local/ and doom-deathmatch-local/
+        ssh "$PAGER" "mkdir -p $DEST/doom-local $DEST/doom-deathmatch-local" 2>/dev/null || { echo "Cannot connect to $PAGER"; exit 1; }
         scp "$RELEASE_DIR"/* "$PAGER:$DEST/doom-local/"
-        ssh "$PAGER" "chmod +x $DEST/doom-local/doomgeneric $DEST/doom-local/*.sh; ALERT '🎮 DOOM LOCAL deployed!'" 2>/dev/null || true
+        ssh "$PAGER" "chmod +x $DEST/doom-local/doomgeneric $DEST/doom-local/*.sh" 2>/dev/null || true
+        # Also deploy to deathmatch-local (copy binary, use deathmatch payload)
+        scp "$RELEASE_DIR/doomgeneric" "$RELEASE_DIR/doom1.wad" "$PAGER:$DEST/doom-deathmatch-local/"
+        scp "$RELEASE_DIR_DM/payload.sh" "$PAGER:$DEST/doom-deathmatch-local/" 2>/dev/null || true
+        ssh "$PAGER" "chmod +x $DEST/doom-deathmatch-local/doomgeneric $DEST/doom-deathmatch-local/*.sh; ALERT '🎮 DOOM LOCAL deployed!'" 2>/dev/null || true
         echo ""
         echo "========================================"
-        echo "  LOCAL build deployed to DOOM LOCAL"
+        echo "  LOCAL build deployed to:"
+        echo "    - DOOM LOCAL"
+        echo "    - DOOM Deathmatch LOCAL"
         echo "  in Payloads > Games menu"
         echo "========================================"
     elif [ "$USE_DEV_BRANCH" = "1" ]; then

@@ -1,12 +1,12 @@
 ---
 # Ansible playbook to set up multiple Chocolate Doom deathmatch servers
 # Usage: ansible-playbook -i inventory doom-server.yml
-# 
+#
 # Variables:
-#   doom_server_count: Number of servers to deploy (default: 4)
+#   doom_server_count: Number of servers to deploy (default: 10)
 #   doom_base_port: Starting port number (default: 2342)
 #
-# Override with: -e "doom_server_count=8 doom_base_port=2342"
+# Override with: -e "doom_server_count=16 doom_base_port=2342"
 
 - name: Set up Chocolate Doom Servers
   hosts: doom_servers
@@ -15,7 +15,7 @@
     doom_user: doom
     doom_dir: /opt/doom
     doom_base_port: 2342
-    doom_server_count: 4
+    doom_server_count: 10
     wad_url: "https://distro.ibiblio.org/slitaz/sources/packages/d/doom1.wad"
 
   tasks:
@@ -31,13 +31,12 @@
           - screen
         state: present
 
-    - name: Create doom user
-      user:
-        name: "{{ doom_user }}"
-        system: yes
-        shell: /usr/sbin/nologin
-        home: "{{ doom_dir }}"
-        create_home: yes
+    #- name: Create doom user
+    #  user:
+    #    name: "{{ doom_user }}"
+    #    shell: /usr/sbin/nologin
+    #    home: "{{ doom_dir }}"
+    #    create_home: yes
 
     - name: Create doom directory
       file:
@@ -45,7 +44,7 @@
         state: directory
         owner: "{{ doom_user }}"
         group: "{{ doom_user }}"
-        mode: '0755'
+        mode: "0755"
 
     - name: Create logs directory
       file:
@@ -53,7 +52,7 @@
         state: directory
         owner: "{{ doom_user }}"
         group: "{{ doom_user }}"
-        mode: '0755'
+        mode: "0755"
 
     - name: Download DOOM shareware WAD
       get_url:
@@ -61,14 +60,14 @@
         dest: "{{ doom_dir }}/doom1.wad"
         owner: "{{ doom_user }}"
         group: "{{ doom_user }}"
-        mode: '0644'
+        mode: "0644"
 
     - name: Create server launch scripts
       copy:
         dest: "{{ doom_dir }}/start-server-{{ item }}.sh"
         owner: "{{ doom_user }}"
         group: "{{ doom_user }}"
-        mode: '0755'
+        mode: "0755"
         content: |
           #!/bin/bash
           # Chocolate Doom Deathmatch Server {{ item }}
@@ -76,14 +75,14 @@
           cd {{ doom_dir }}
           exec /usr/games/chocolate-server \
             -port {{ doom_base_port + item }} \
-            -servername "Pineapple DOOM {{ item + 1 }}" \
-            -netlog {{ doom_dir }}/logs/server-{{ item }}.log
+            -servername "Pineapple DOOM {{ item + 1 }}"
       loop: "{{ range(0, doom_server_count) | list }}"
 
+    #-netlog {{ doom_dir }}/logs/server-{{ item }}.log
     - name: Create systemd services for Doom servers
       copy:
         dest: "/etc/systemd/system/doom-server-{{ item }}.service"
-        mode: '0644'
+        mode: "0644"
         content: |
           [Unit]
           Description=Chocolate Doom Server {{ item }} (port {{ doom_base_port + item }})
@@ -107,35 +106,35 @@
       systemd:
         daemon_reload: yes
 
-    - name: Enable Doom servers (but don't start)
-      systemd:
-        name: "doom-server-{{ item }}"
-        enabled: yes
-        state: stopped
-      loop: "{{ range(0, doom_server_count) | list }}"
+    #- name: Enable Doom servers (but don't start)
+    #  systemd:
+    #    name: "doom-server-{{ item }}"
+    #    enabled: yes
+    #    state: stopped
+    #  loop: "{{ range(0, doom_server_count) | list }}"
 
-    - name: Open firewall ports for Doom servers (if ufw is active)
-      ufw:
-        rule: allow
-        port: "{{ doom_base_port + item }}"
-        proto: udp
-      loop: "{{ range(0, doom_server_count) | list }}"
-      ignore_errors: yes
+    #- name: Open firewall ports for Doom servers (if ufw is active)
+    #  ufw:
+    #    rule: allow
+    #    port: "{{ doom_base_port + item }}"
+    #    proto: udp
+    #  loop: "{{ range(0, doom_server_count) | list }}"
+    #  ignore_errors: yes
 
     - name: Create management script
       copy:
         dest: "{{ doom_dir }}/manage-servers.sh"
         owner: "{{ doom_user }}"
         group: "{{ doom_user }}"
-        mode: '0755'
+        mode: "0755"
         content: |
           #!/bin/bash
           # Manage multiple Doom servers
           # Usage: ./manage-servers.sh [start|stop|status|restart] [server_num]
-          
+
           ACTION=${1:-status}
           SERVER=${2:-all}
-          
+
           if [ "$SERVER" = "all" ]; then
             for i in $(seq 0 {{ doom_server_count - 1 }}); do
               echo "=== Server $i (port {{ doom_base_port }}+$i) ==="
@@ -149,19 +148,19 @@
       debug:
         msg: |
           {{ doom_server_count }} Doom servers deployed (NOT started)!
-          
+
           Ports: {{ doom_base_port }} - {{ doom_base_port + doom_server_count - 1 }}
-          
+
           Start servers manually:
             systemctl start doom-server-0   # Port {{ doom_base_port }}
             systemctl start doom-server-1   # Port {{ doom_base_port + 1 }}
             ...
             systemctl start doom-server-{{ doom_server_count - 1 }}   # Port {{ doom_base_port + doom_server_count - 1 }}
-          
+
           Or use the management script:
             {{ doom_dir }}/manage-servers.sh start all
             {{ doom_dir }}/manage-servers.sh status
-          
+
           Logs:
             {{ doom_dir }}/logs/server-N.log   (network debug)
             {{ doom_dir }}/logs/console-N.log (player joins/leaves)
