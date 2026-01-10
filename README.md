@@ -94,14 +94,10 @@ External USB keyboards work alongside the Pager's built-in buttons. **Plug in yo
 
 Connect to our public DOOM servers for multiplayer deathmatch!
 
-| | | |
-|:---:|:---:|:---:|
-| ![Deathmatch Options](img/pager-deathmatch-options.png) | ![Server Browser](img/pager-lobby-browser.png) | ![Lobby](img/pager-lobby.png) |
-| **Connection Options** | **Server Browser** | **Waiting in Lobby** |
-
 | | |
 |:---:|:---:|
-| ![Deathmatch Lobby](img/deathmatch.png) | ![Deathmatch Gameplay](img/deathmatch-1.png) |
+| ![Deathmatch Options](img/pager-deathmatch-options.png) | ![Server Browser](img/pager-lobby-browser.png) |
+| ![Lobby](img/pager-lobby.png) | ![Deathmatch Gameplay](img/deathmatch-1.png) |
 
 Run the **DOOM Deathmatch** payload from: Payloads → Games
 
