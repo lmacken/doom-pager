@@ -236,6 +236,7 @@ esac
 
 LOG ""
 LOG "Press any button to start..."
+sleep 0.1  # Flush output buffer
 WAIT_FOR_INPUT >/dev/null 2>&1
 LOG "LOADING..."
 
