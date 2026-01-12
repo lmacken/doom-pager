@@ -621,7 +621,7 @@ index 733b290..2115fdf 100644
 -#endif
 +#endif // __M_FIXED__
 diff --git a/doomgeneric/m_menu.c b/doomgeneric/m_menu.c
-index 4feb72c..1c44f04 100644
+index 4feb72c..561dbd3 100644
 --- a/doomgeneric/m_menu.c
 +++ b/doomgeneric/m_menu.c
 @@ -74,7 +74,12 @@ int			showMessages = 1;
@@ -638,6 +638,20 @@ index 4feb72c..1c44f04 100644
  int			screenblocks = 10;
  
  // temp for screenblocks (0-9)
+@@ -943,12 +948,7 @@ void M_VerifyNightmare(int key)
+ 
+ void M_ChooseSkill(int choice)
+ {
+-    if (choice == nightmare)
+-    {
+-	M_StartMessage(DEH_String(NIGHTMARE),M_VerifyNightmare,true);
+-	return;
+-    }
+-	
++    // Skip nightmare confirmation on embedded devices (no keyboard for 'y')
+     G_DeferedInitNew(choice,epi+1,1);
+     M_ClearMenus ();
+ }
 diff --git a/doomgeneric/p_enemy.c b/doomgeneric/p_enemy.c
 index f2b44d1..25a06cc 100644
 --- a/doomgeneric/p_enemy.c
