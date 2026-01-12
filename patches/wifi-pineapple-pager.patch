@@ -168,48 +168,121 @@ index 4ee4166..0ccf642 100644
  OBJDIR=build
  OUTPUT=doomgeneric
 diff --git a/doomgeneric/d_loop.c b/doomgeneric/d_loop.c
-index 9ba0270..235cf15 100644
+index 9ba0270..944385c 100644
 --- a/doomgeneric/d_loop.c
 +++ b/doomgeneric/d_loop.c
-@@ -726,20 +726,31 @@ boolean D_InitNetGame(net_connect_data_t *connect_data)
+@@ -726,40 +726,84 @@ boolean D_InitNetGame(net_connect_data_t *connect_data)
          if (i > 0)
          {
              const char *best_addr = NULL;
 +            int retry;
++            boolean stay_in_automatch = true;
              
-             printf("Starting auto-matchmaking...\n");
-             DG_DrawAutoMatch();
-             
+-            printf("Starting auto-matchmaking...\n");
+-            DG_DrawAutoMatch();
+-            
 -            // Initialize and query servers
 -            NET_Query_Init();
 -            NET_Query_RunAll();  // Blocking query
 -            
 -            // Find best server
 -            best_addr = DG_Browser_GetAutoMatchAddress();
-+            // Try up to 3 times to find a server
-+            for (retry = 0; retry < 3 && best_addr == NULL; retry++)
-+            {
-+                if (retry > 0)
-+                {
-+                    printf("Retry %d/3...\n", retry + 1);
-+                    I_Sleep(500);  // Brief pause before retry
-+                }
-+                
-+                // Initialize and query servers
-+                NET_Query_Init();
-+                NET_Query_RunAll();  // Blocking query
-+                
-+                // Find best server
-+                best_addr = DG_Browser_GetAutoMatchAddress();
-+            }
-             
-             if (best_addr == NULL)
+-            
+-            if (best_addr == NULL)
++            while (stay_in_automatch)
              {
 -                printf("No suitable server found!\n");
-+                printf("No suitable server found after 3 attempts!\n");
-                 DG_DrawNoServers();
+-                DG_DrawNoServers();
++                best_addr = NULL;
++                
++                printf("Starting auto-matchmaking...\n");
++                DG_DrawAutoMatch();
++                
++                // Try up to 3 times to find a server
++                for (retry = 0; retry < 3 && best_addr == NULL; retry++)
++                {
++                    if (retry > 0)
++                    {
++                        printf("Retry %d/3...\n", retry + 1);
++                        I_Sleep(500);  // Brief pause before retry
++                    }
++                    
++                    // Initialize and query servers
++                    NET_Query_Init();
++                    NET_Query_RunAll();  // Blocking query
++                    
++                    // Find best server
++                    best_addr = DG_Browser_GetAutoMatchAddress();
++                }
                  
-                 // Wait for input then exit
+-                // Wait for input then exit
+-                while (DG_CheckLobbyInput() == 0)
++                if (best_addr == NULL)
+                 {
+-                    I_Sleep(50);
++                    printf("No suitable server found after 3 attempts!\n");
++                    DG_DrawNoServers();
++                    
++                    // Wait for input then exit
++                    while (DG_CheckLobbyInput() == 0)
++                    {
++                        I_Sleep(50);
++                    }
++                    I_Quit();
++                }
++                
++                printf("Auto-matched to: %s\n", best_addr);
++                DG_DrawConnecting(best_addr);
++                
++                net_socket_module.InitClient();
++                addr = net_socket_module.ResolveAddress((char *)best_addr);
++                
++                if (addr == NULL)
++                {
++                    I_Error("Unable to resolve '%s'\n", best_addr);
++                }
++                
++                // Connect and wait in lobby
++                if (!NET_CL_Connect(addr, connect_data))
++                {
++                    printf("Failed to connect, retrying...\n");
++                    NET_Query_Shutdown();
++                    continue;
++                }
++                
++                printf("Connected to %s, entering lobby...\n", NET_AddrToString(addr));
++                
++                // Wait in lobby - returns false if user quits
++                if (NET_WaitForLaunch())
++                {
++                    // Game is starting!
++                    stay_in_automatch = false;
++                    result = true;
++                }
++                else
++                {
++                    // User quit lobby - search for another server
++                    printf("Returning to automatch...\n");
++                    NET_Query_Shutdown();
+                 }
+-                I_Quit();
+             }
+             
+-            printf("Auto-matched to: %s\n", best_addr);
+-            DG_DrawConnecting(best_addr);
+-            
+-            net_socket_module.InitClient();
+-            addr = net_socket_module.ResolveAddress((char *)best_addr);
+-            
+-            if (addr == NULL)
+-            {
+-                I_Error("Unable to resolve '%s'\n", best_addr);
+-            }
++            // Skip the normal connect/wait flow below
++            return result;
+         }
+ 
+         //!
 diff --git a/doomgeneric/doomgeneric_linuxvt.c b/doomgeneric/doomgeneric_linuxvt.c
 index 3791649..5b87763 100644
 --- a/doomgeneric/doomgeneric_linuxvt.c
