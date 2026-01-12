@@ -2,13 +2,13 @@
 # Title: DOOM Deathmatch
 # Description: Multiplayer deathmatch with item respawns!
 # Author: @lmacken
-# Version: 5.1
+# Version: 5.0
 # Category: Games
 
 PAYLOAD_DIR="/root/payloads/user/games/doom-deathmatch"
 CONFIG_FILE="$PAYLOAD_DIR/server.conf"
 
-# Defaults - optimized for fun on Pager
+# Defaults
 DEFAULT_SERVER_IP="64.227.99.100"
 DEFAULT_PLAYER_NAME="Pager"
 DEFAULT_CONNECTION_MODE="automatch"
@@ -33,41 +33,27 @@ chmod +x ./doomgeneric
 WAD_FILE=$(ls "$PAYLOAD_DIR"/*.wad 2>/dev/null | head -1)
 [ -z "$WAD_FILE" ] && { LOG red "ERROR: No .wad file found"; exit 1; }
 
-# Show intro
-LOG "DOOM DEATHMATCH
+# Quick setup - go straight to settings, press enter to accept defaults
+# Player name (just hit enter to keep current)
+new_name=$(TEXT_PICKER "Player Name" "$PLAYER_NAME")
+[ -n "$new_name" ] && PLAYER_NAME="$new_name"
 
-Player: $PLAYER_NAME
-Map: $MAP  Time: ${TIMELIMIT}m
+# Connection mode
+mode_choice=$(NUMBER_PICKER "1=Auto 2=Browse 3=Direct" "1")
+case "$mode_choice" in
+    2) CONNECTION_MODE="browse" ;;
+    3) CONNECTION_MODE="direct" ;;
+    *) CONNECTION_MODE="automatch" ;;
+esac
 
-D-pad=Move  Red=Fire
-Green+Up=Use  Green+L/R=Strafe
-Red+Green=Quit"
+# Direct connect needs IP
+if [ "$CONNECTION_MODE" = "direct" ]; then
+    new_ip=$(IP_PICKER "Server IP" "$SERVER_IP")
+    [ -n "$new_ip" ] && SERVER_IP="$new_ip"
+fi
 
-sleep 1
-
-# Quick settings
-resp=$(CONFIRMATION_DIALOG "Change settings?")
-if [ "$resp" = "$DUCKYSCRIPT_USER_CONFIRMED" ]; then
-    # Connection mode
-    mode_choice=$(NUMBER_PICKER "1=Auto 2=Browse 3=IP" "1")
-    case "$mode_choice" in
-        1) CONNECTION_MODE="automatch" ;;
-        2) CONNECTION_MODE="browse" ;;
-        3) CONNECTION_MODE="direct" ;;
-    esac
-
-    # Player name
-    new_name=$(TEXT_PICKER "Name" "$PLAYER_NAME")
-    [ -n "$new_name" ] && PLAYER_NAME="$new_name"
-
-    # Direct connect
-    if [ "$CONNECTION_MODE" = "direct" ]; then
-        new_ip=$(IP_PICKER "Server IP" "$SERVER_IP")
-        [ -n "$new_ip" ] && SERVER_IP="$new_ip"
-    fi
-
-    # Save
-    cat > "$CONFIG_FILE" << EOF
+# Save config
+cat > "$CONFIG_FILE" << EOF
 PLAYER_NAME="$PLAYER_NAME"
 CONNECTION_MODE="$CONNECTION_MODE"
 SERVER_IP="$SERVER_IP"
@@ -75,15 +61,9 @@ SERVER_PORT="$SERVER_PORT"
 MAP="$MAP"
 TIMELIMIT="$TIMELIMIT"
 EOF
-    LOG "Saved!"
-fi
 
-LOG "Press any button..."
-sleep 0.1
-WAIT_FOR_INPUT >/dev/null 2>&1
-
-# Show spinner
-SPINNER_ID=$(START_SPINNER "Loading DOOM...")
+# Show spinner and launch immediately
+SPINNER_ID=$(START_SPINNER "Connecting...")
 
 # Stop services
 /etc/init.d/php8-fpm stop 2>/dev/null
@@ -93,7 +73,7 @@ SPINNER_ID=$(START_SPINNER "Loading DOOM...")
 /etc/init.d/pineapd stop 2>/dev/null
 
 STOP_SPINNER "$SPINNER_ID" 2>/dev/null
-sleep 0.5
+sleep 0.3
 
 # Parse map (E1M4 -> 1 4)
 EPISODE=$(echo "$MAP" | sed -n 's/^E\([0-9]\)M[0-9]$/\1/p')
@@ -102,9 +82,9 @@ MAP_NUM=$(echo "$MAP" | sed -n 's/^E[0-9]M\([0-9]\)$/\1/p')
 [ -z "$MAP_NUM" ] && MAP_NUM=1
 
 # Build args:
-# -altdeath: Items respawn after 30 sec (more action!)
-# -skill 3: Normal damage (default "Hurt Me Plenty")
-# -nomonsters: No monsters in deathmatch
+# -altdeath: Items respawn after 30 sec
+# -skill 3: Normal damage
+# -nomonsters: No monsters
 ARGS="-iwad $WAD_FILE -name $PLAYER_NAME -warp $EPISODE $MAP_NUM"
 ARGS="$ARGS -altdeath -skill 3 -nomonsters"
 [ "$TIMELIMIT" -gt 0 ] 2>/dev/null && ARGS="$ARGS -timer $TIMELIMIT"
