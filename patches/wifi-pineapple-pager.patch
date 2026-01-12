@@ -167,6 +167,49 @@ index 4ee4166..0ccf642 100644
  # subdirectory for objects
  OBJDIR=build
  OUTPUT=doomgeneric
+diff --git a/doomgeneric/d_loop.c b/doomgeneric/d_loop.c
+index 9ba0270..235cf15 100644
+--- a/doomgeneric/d_loop.c
++++ b/doomgeneric/d_loop.c
+@@ -726,20 +726,31 @@ boolean D_InitNetGame(net_connect_data_t *connect_data)
+         if (i > 0)
+         {
+             const char *best_addr = NULL;
++            int retry;
+             
+             printf("Starting auto-matchmaking...\n");
+             DG_DrawAutoMatch();
+             
+-            // Initialize and query servers
+-            NET_Query_Init();
+-            NET_Query_RunAll();  // Blocking query
+-            
+-            // Find best server
+-            best_addr = DG_Browser_GetAutoMatchAddress();
++            // Try up to 3 times to find a server
++            for (retry = 0; retry < 3 && best_addr == NULL; retry++)
++            {
++                if (retry > 0)
++                {
++                    printf("Retry %d/3...\n", retry + 1);
++                    I_Sleep(500);  // Brief pause before retry
++                }
++                
++                // Initialize and query servers
++                NET_Query_Init();
++                NET_Query_RunAll();  // Blocking query
++                
++                // Find best server
++                best_addr = DG_Browser_GetAutoMatchAddress();
++            }
+             
+             if (best_addr == NULL)
+             {
+-                printf("No suitable server found!\n");
++                printf("No suitable server found after 3 attempts!\n");
+                 DG_DrawNoServers();
+                 
+                 // Wait for input then exit
 diff --git a/doomgeneric/doomgeneric_linuxvt.c b/doomgeneric/doomgeneric_linuxvt.c
 index 3791649..5b87763 100644
 --- a/doomgeneric/doomgeneric_linuxvt.c
