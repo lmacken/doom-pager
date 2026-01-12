@@ -653,10 +653,46 @@ index 4feb72c..561dbd3 100644
      M_ClearMenus ();
  }
 diff --git a/doomgeneric/net_lobby.c b/doomgeneric/net_lobby.c
-index 8858ab1..838aa15 100644
+index 8858ab1..b7965e8 100644
 --- a/doomgeneric/net_lobby.c
 +++ b/doomgeneric/net_lobby.c
-@@ -651,29 +651,33 @@ void DG_DrawBrowser(void)
+@@ -273,27 +273,18 @@ void DG_DrawLoadingBrowser(const char *message)
+     lobby_flush();
+ }
+ 
+-// Draw loading screen for auto-match with real-time progress
++// Draw loading screen for auto-match (static - no real-time updates)
++// Only draws on first call (ports_scanned == 0), ignores subsequent updates
+ void DG_DrawLoadingAutoMatch(int servers_found, int ports_scanned)
+ {
+-    char buf[64];
+-    
+-    lobby_clear(0x0841);  // Very dark gray
+-    
+-    // Title bar
+-    lobby_fill_rect(0, 0, LOBBY_WIDTH, 24, RGB565_DOOM_RED);
+-    lobby_draw_centered(8, "DOOM DEATHMATCH", RGB565_WHITE);
+-    
+-    // Scanning status
+-    lobby_draw_centered(70, "SCANNING FOR SERVERS", RGB565_YELLOW);
++    // Only draw on first call to avoid flicker from rapid updates
++    if (ports_scanned > 0)
++        return;
+     
+-    // Real-time stats
+-    snprintf(buf, sizeof(buf), "Port: %d", DEFAULT_BASE_PORT + ports_scanned - 1);
+-    lobby_draw_centered(100, buf, RGB565_CYAN);
++    lobby_clear(0x0000);  // Black background
+     
+-    snprintf(buf, sizeof(buf), "Found: %d server%s", 
+-             servers_found, servers_found == 1 ? "" : "s");
+-    lobby_draw_centered(130, buf, servers_found > 0 ? RGB565_GREEN : RGB565_WHITE);
++    lobby_draw_centered(100, "DEATHMATCH", RGB565_DOOM_RED);
++    lobby_draw_centered(130, "Finding servers...", RGB565_WHITE);
+     
+     lobby_flush();
+ }
+@@ -651,29 +642,33 @@ void DG_DrawBrowser(void)
      lobby_flush();
  }
  
@@ -703,7 +739,7 @@ index 8858ab1..838aa15 100644
      
      lobby_flush();
  }
-@@ -681,14 +685,11 @@ void DG_DrawAutoMatch(void)
+@@ -681,14 +676,11 @@ void DG_DrawAutoMatch(void)
  // Draw "No servers available" screen
  void DG_DrawNoServers(void)
  {
@@ -722,7 +758,7 @@ index 8858ab1..838aa15 100644
      
      lobby_flush();
  }
-@@ -697,10 +698,7 @@ void DG_DrawNoServers(void)
+@@ -697,10 +689,7 @@ void DG_DrawNoServers(void)
  void DG_DrawExiting(void)
  {
      lobby_clear(0x0000);  // Black background
