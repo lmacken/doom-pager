@@ -338,10 +338,9 @@ if [ "$SKIP_DEPLOY" = "0" ]; then
         ssh "$PAGER" "mkdir -p $DEST/doom-local $DEST/doom-deathmatch-local" 2>/dev/null || { echo "Cannot connect to $PAGER"; exit 1; }
         scp "$RELEASE_DIR"/* "$PAGER:$DEST/doom-local/"
         ssh "$PAGER" "chmod +x $DEST/doom-local/doomgeneric $DEST/doom-local/*.sh" 2>/dev/null || true
-        # Also deploy to deathmatch-local (copy binary, use deathmatch payload)
-        scp "$RELEASE_DIR/doomgeneric" "$RELEASE_DIR/doom1.wad" "$PAGER:$DEST/doom-deathmatch-local/"
+        # Deathmatch-local: symlink to doom-local binary, copy payload
         scp "$RELEASE_DIR_DM/payload.sh" "$PAGER:$DEST/doom-deathmatch-local/" 2>/dev/null || true
-        ssh "$PAGER" "chmod +x $DEST/doom-deathmatch-local/doomgeneric $DEST/doom-deathmatch-local/*.sh; ALERT '🎮 DOOM LOCAL deployed!'" 2>/dev/null || true
+        ssh "$PAGER" "cd $DEST/doom-deathmatch-local && rm -f doomgeneric doom1.wad && ln -s ../doom-local/doomgeneric . && ln -s ../doom-local/doom1.wad . && chmod +x *.sh; ALERT '🎮 DOOM LOCAL deployed!'" 2>/dev/null || true
         echo ""
         echo "========================================"
         echo "  LOCAL build deployed to:"
