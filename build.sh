@@ -178,9 +178,19 @@ fi
 # 4. Build
 echo "[4/6] Building..."
 
+# Set up SDK environment for LTO build
+# LTO requires the native SDK compiler (not QEMU wrapper)
 export OPENWRT_SDK="$BUILD_DIR/openwrt-sdk"
+export STAGING_DIR="$OPENWRT_SDK/staging_dir"
+export PATH="$OPENWRT_SDK/staging_dir/toolchain-mipsel_24kc_gcc-11.2.0_musl/bin:$PATH"
+
+# Clean and build with optimal flags:
+# - LTO enabled (default in Makefile)
+# - GCC prefetch enabled (default in Makefile)
+# - DSP enabled via -march=24kec (default)
+# - HOT_FUNC attributes on hot functions
 make -C "$DOOMGENERIC_DIR/doomgeneric" -f Makefile.mipsel clean
-make -C "$DOOMGENERIC_DIR/doomgeneric" -f Makefile.mipsel -j$(nproc)
+make -C "$DOOMGENERIC_DIR/doomgeneric" -f Makefile.mipsel CC=mipsel-openwrt-linux-musl-gcc -j$(nproc)
 
 BINARY="$DOOMGENERIC_DIR/doomgeneric/doomgeneric"
 WAD="$DOOMGENERIC_DIR/doomgeneric/doom1.wad"
@@ -188,6 +198,13 @@ WAD="$DOOMGENERIC_DIR/doomgeneric/doom1.wad"
 echo ""
 echo "Build complete:"
 ls -lh "$BINARY" "$WAD"
+
+# Verify optimizations
+if command -v mipsel-linux-gnu-objdump &>/dev/null; then
+    DSP_COUNT=$(mipsel-linux-gnu-objdump -d "$BINARY" 2>/dev/null | grep -c "lwx\|lbux" || echo "?")
+    PREF_COUNT=$(mipsel-linux-gnu-objdump -d "$BINARY" 2>/dev/null | grep -c "pref" || echo "?")
+    echo "Optimizations: $DSP_COUNT DSP loads, $PREF_COUNT prefetch instructions"
+fi
 
 # 5. Populate release directories
 if [ "$SKIP_RELEASE" = "0" ]; then
