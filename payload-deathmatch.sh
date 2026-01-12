@@ -102,11 +102,11 @@ MAP_NUM=$(echo "$MAP" | sed -n 's/^E[0-9]M\([0-9]\)$/\1/p')
 [ -z "$MAP_NUM" ] && MAP_NUM=1
 
 # Build args:
-# -altdeath: Items respawn after 30 sec (more fun!)
-# -skill 1: Double ammo pickups, half damage (casual friendly)
+# -altdeath: Items respawn after 30 sec (more action!)
+# -skill 3: Normal damage (default "Hurt Me Plenty")
 # -nomonsters: No monsters in deathmatch
 ARGS="-iwad $WAD_FILE -name $PLAYER_NAME -warp $EPISODE $MAP_NUM"
-ARGS="$ARGS -altdeath -skill 1 -nomonsters"
+ARGS="$ARGS -altdeath -skill 3 -nomonsters"
 [ "$TIMELIMIT" -gt 0 ] 2>/dev/null && ARGS="$ARGS -timer $TIMELIMIT"
 
 case "$CONNECTION_MODE" in
