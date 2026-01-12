@@ -652,6 +652,88 @@ index 4feb72c..561dbd3 100644
      G_DeferedInitNew(choice,epi+1,1);
      M_ClearMenus ();
  }
+diff --git a/doomgeneric/net_lobby.c b/doomgeneric/net_lobby.c
+index 8858ab1..838aa15 100644
+--- a/doomgeneric/net_lobby.c
++++ b/doomgeneric/net_lobby.c
+@@ -651,29 +651,33 @@ void DG_DrawBrowser(void)
+     lobby_flush();
+ }
+ 
+-// Draw "Connecting..." screen
++// Draw simple "Connecting..." screen (automatch uses this directly)
+ void DG_DrawConnecting(const char *server_addr)
+ {
+     char buf[80];
+     
+-    lobby_clear(0x1082);
+-    lobby_fill_rect(0, 80, LOBBY_WIDTH, 60, RGB565_DOOM_RED);
+-    lobby_draw_centered(90, "CONNECTING...", RGB565_WHITE);
+-    snprintf(buf, sizeof(buf), "%s", server_addr ? server_addr : "...");
+-    lobby_draw_centered(110, buf, RGB565_YELLOW);
++    lobby_clear(0x0000);  // Black background
++    
++    // Simple centered status
++    lobby_draw_centered(100, "DEATHMATCH", RGB565_DOOM_RED);
++    
++    if (server_addr) {
++        snprintf(buf, sizeof(buf), "Joining %s", server_addr);
++        lobby_draw_centered(130, buf, RGB565_WHITE);
++    } else {
++        lobby_draw_centered(130, "Finding server...", RGB565_WHITE);
++    }
++    
+     lobby_flush();
+ }
+ 
+-// Draw "Auto-matching..." screen  
++// Draw "Auto-matching..." screen - simple version
+ void DG_DrawAutoMatch(void)
+ {
+-    lobby_clear(0x1082);
+-    
+-    lobby_fill_rect(0, 50, LOBBY_WIDTH, 120, RGB565_DOOM_RED);
+-    lobby_draw_centered(55, "AUTO-MATCHMAKING", RGB565_WHITE);
+-    lobby_draw_centered(75, "Discovering servers...", RGB565_YELLOW);
++    lobby_clear(0x0000);  // Black background
+     
+-    lobby_draw_centered(100, "Scanning ports for active servers", RGB565_CYAN);
++    lobby_draw_centered(100, "DEATHMATCH", RGB565_DOOM_RED);
++    lobby_draw_centered(130, "Finding server...", RGB565_WHITE);
+     
+     lobby_flush();
+ }
+@@ -681,14 +685,11 @@ void DG_DrawAutoMatch(void)
+ // Draw "No servers available" screen
+ void DG_DrawNoServers(void)
+ {
+-    lobby_clear(0x1082);
+-    
+-    lobby_fill_rect(0, 70, LOBBY_WIDTH, 80, RGB565_DOOM_RED);
+-    lobby_draw_centered(80, "NO SERVERS AVAILABLE", RGB565_WHITE);
+-    lobby_draw_centered(100, "All servers are offline,", RGB565_YELLOW);
+-    lobby_draw_centered(115, "full, or in-game", RGB565_YELLOW);
++    lobby_clear(0x0000);  // Black background
+     
+-    lobby_draw_centered(160, "GREEN: Try again   RED: Exit", RGB565_CYAN);
++    lobby_draw_centered(90, "DEATHMATCH", RGB565_DOOM_RED);
++    lobby_draw_centered(120, "No servers available", RGB565_WHITE);
++    lobby_draw_centered(150, "Press any button to exit", RGB565_CYAN);
+     
+     lobby_flush();
+ }
+@@ -697,10 +698,7 @@ void DG_DrawNoServers(void)
+ void DG_DrawExiting(void)
+ {
+     lobby_clear(0x0000);  // Black background
+-    
+-    lobby_fill_rect(0, 90, LOBBY_WIDTH, 40, RGB565_DOOM_RED);
+-    lobby_draw_centered(100, "EXITING...", RGB565_WHITE);
+-    
++    lobby_draw_centered(110, "Exiting...", RGB565_WHITE);
+     lobby_flush();
+ }
+ 
 diff --git a/doomgeneric/p_enemy.c b/doomgeneric/p_enemy.c
 index f2b44d1..25a06cc 100644
 --- a/doomgeneric/p_enemy.c
