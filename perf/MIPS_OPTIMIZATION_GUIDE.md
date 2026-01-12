@@ -119,14 +119,68 @@ LTO allows GCC to optimize across compilation units, dramatically increasing DSP
 | Without LTO | 676KB | 118 |
 | **With LTO** | **630KB** | **1002** |
 
+### Why LTO Matters So Much
+
+Without LTO, GCC optimizes each `.c` file separately. It can't:
+- Inline functions across files (e.g., `FixedMul` from `m_fixed.c` into `r_draw.c`)
+- See that a pointer always points to the same array (enabling DSP indexed loads)
+- Eliminate dead code paths that only become visible with whole-program analysis
+
+With LTO, GCC defers optimization until link time, when it can see the entire program. This is why DSP instruction count jumps from 118 to 1002.
+
+### The Toolchain Requirement
+
+LTO requires **the same compiler** for both compilation and linking. On x86_64 Linux, you have two options for cross-compiling to MIPS:
+
+| Method | LTO Support | Speed |
+|--------|-------------|-------|
+| `mipsel-openwrt-linux-musl-gcc` (native SDK) | ✅ **Full LTO** | Fast |
+| QEMU wrapper (runs MIPS GCC via emulation) | ❌ No LTO | Slow |
+
+**CRITICAL:** You must use the native OpenWrt SDK cross-compiler, NOT a QEMU-wrapped MIPS GCC. The QEMU approach was used early in development for simplicity but breaks LTO.
+
+### OpenWrt SDK Setup
+
+```bash
+# Download OpenWrt SDK for ramips/mt76x8 (MIPS 24K target)
+SDK_URL="https://downloads.openwrt.org/releases/22.03.5/targets/ramips/mt76x8/openwrt-sdk-22.03.5-ramips-mt76x8_gcc-11.2.0_musl.Linux-x86_64.tar.xz"
+curl -L "$SDK_URL" | tar -xJ
+
+# Set up environment
+export SDK="$(pwd)/openwrt-sdk-22.03.5-ramips-mt76x8_gcc-11.2.0_musl.Linux-x86_64"
+export STAGING_DIR="$SDK/staging_dir"
+export PATH="$SDK/staging_dir/toolchain-mipsel_24kc_gcc-11.2.0_musl/bin:$PATH"
+
+# Verify compiler works
+mipsel-openwrt-linux-musl-gcc --version
+# mipsel-openwrt-linux-musl-gcc (OpenWrt GCC 11.2.0) 11.2.0
+```
+
 ### Enabling LTO
 
 ```makefile
+CC = mipsel-openwrt-linux-musl-gcc
 CFLAGS += -flto
 LDFLAGS += -flto
+
+# IMPORTANT: Use the same CC for linking
+$(TARGET): $(OBJS)
+	$(CC) $(LDFLAGS) -o $@ $^
 ```
 
-**Note:** LTO requires the same compiler for linking. Use the SDK's native GCC, not a QEMU wrapper.
+### Verifying LTO is Active
+
+```bash
+# Check for LTO sections in object files
+mipsel-openwrt-linux-musl-gcc -flto -c foo.c -o foo.o
+file foo.o
+# foo.o: LLVM IR bitcode  (LTO active!)
+
+# vs without LTO:
+mipsel-openwrt-linux-musl-gcc -c foo.c -o foo.o
+file foo.o
+# foo.o: ELF 32-bit LSB relocatable, MIPS...
+```
 
 ---
 
@@ -478,5 +532,5 @@ addiu t1, t1, 1         ; only executes if branch taken (not wasted)
 
 ---
 
-*Last updated: January 2025*  
+*Last updated: January 2026*  
 *Tested on WiFi Pineapple Pager hardware with DOOM 1.9 shareware*
