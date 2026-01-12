@@ -1,9 +1,22 @@
+diff --git a/.gitignore b/.gitignore
+index 4ac2545..5c97fe3 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -9,5 +9,7 @@
+ Debug/
+ Release/
+ Build/
+-doomgeneric
++# Binary output (not the source directory)
++/doomgeneric/doomgeneric
+ doomgeneric.map
++*.wad
 diff --git a/doomgeneric/Makefile.mipsel b/doomgeneric/Makefile.mipsel
 new file mode 100644
-index 0000000..49f4364
+index 0000000..5e8c7b8
 --- /dev/null
 +++ b/doomgeneric/Makefile.mipsel
-@@ -0,0 +1,73 @@
+@@ -0,0 +1,197 @@
 +################################################################
 +#
 +# Cross-compilation Makefile for MIPS (mipsel-linux-gnu)
@@ -17,14 +30,39 @@ index 0000000..49f4364
 +endif
 +
 +# OpenWrt SDK musl-based cross-compiler for mipsel_24kc
-+# Using QEMU wrapper to run x86-64 SDK on ARM64 host
++# Default: Use SDK directly (supports LTO, better optimization)
++# Set USE_QEMU_CC=1 to use QEMU wrapper instead (for debugging)
++ifdef USE_QEMU_CC
 +CC=$(shell pwd)/qemu-gcc-wrapper.sh
 +CROSS_COMPILE=$(shell pwd)/qemu-gcc-wrapper.sh
-+# Keep Doom at 320x200 internally, we scale in output code
++else
++CC=mipsel-openwrt-linux-musl-gcc
++CROSS_COMPILE=mipsel-openwrt-linux-musl-
++endif
++# =============================================================================
++# POTATO MODE - Low resolution rendering for maximum performance
++# =============================================================================
++# Uses Doom's built-in low-detail mode (pixel doubling) rather than changing
++# internal resolution. This keeps all game math working correctly.
++#
++# POTATO_MODE=1 : Half-width (160 effective columns, 2x horizontal pixels)
++# POTATO_MODE=2 : Quarter mode (adds 2x vertical pixels too)
++# Default: Full resolution (320x200)
++#
++# Keep internal resolution at 320x200 - potato mode uses pixel doubling
 +CFLAGS+=-DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200
-+# Widen FOV to compensate for aspect ratio stretch (480/320)/(222/200) = 1.35x
-+# Original FOV is 2048, adjusted: 2048 * 1.35 = 2765
++# Widen FOV to compensate for aspect ratio stretch
 +CFLAGS+=-DFIELDOFVIEW=2765
++
++ifdef POTATO_MODE
++ifeq ($(POTATO_MODE),2)
++CFLAGS+=-DPOTATO_MODE=2
++$(info Building POTATO MODE 2: Quarter resolution (2x2 chunky pixels))
++else
++CFLAGS+=-DPOTATO_MODE=1
++$(info Building POTATO MODE 1: Half-width (2x horizontal chunky pixels))
++endif
++endif
 +# Optimize for speed
 +# -O3: Maximum speed optimization
 +# -march=24kec: Target MIPS 24KEc CPU with DSP extensions
@@ -39,16 +77,113 @@ index 0000000..49f4364
 +CFLAGS+=-O3 -Wall -DNORMALUNIX -DLINUX -D_DEFAULT_SOURCE
 +CFLAGS+=-march=24kec -mtune=24kec -mdsp -mbranch-likely
 +CFLAGS+=-ffast-math -funroll-loops -fomit-frame-pointer
-+CFLAGS+=-fprefetch-loop-arrays -finline-functions
++CFLAGS+=-finline-functions
++# LTO: ON by default for best performance
++# Disable with NO_LTO=1 for faster builds during development
++ifndef NO_LTO
++CFLAGS+=-flto
++LDFLAGS+=-flto
++endif
++
++# GCC auto-prefetch: ON by default when LTO is enabled (they work well together)
++# Disable with NO_GCC_PREFETCH=1
++# WARNING: DO NOT use with manual render prefetch without LTO (causes 45ms stalls)
++ifndef NO_LTO
++ifndef NO_GCC_PREFETCH
++CFLAGS+=-fprefetch-loop-arrays
++endif
++endif
++
++# Manual render prefetch: OFF by default (GCC prefetch is better with LTO)
++# Enable with MANUAL_RENDER_PREFETCH=1
++ifndef MANUAL_RENDER_PREFETCH
++CFLAGS+=-DNO_RENDER_PREFETCH
++endif
++
++# Cache-aligned arrays: ON by default for hot rendering arrays (vissprites, drawsegs)
++# Disable with NO_CACHE_ALIGN=1
++# NOTE: Only 2 arrays aligned - more alignment tested worse (++ vs +++)
++ifndef NO_CACHE_ALIGN
++CFLAGS+=-DCACHE_ALIGN_ARRAYS
++endif
++
++# GCC cache hints: OFF by default (tested, reduced PREF 149->70, scored ++ vs +++)
++# Enable with CACHE_HINTS=1 to try: --param=l1-cache-size=16 --param=l1-cache-line-size=32
++ifdef CACHE_HINTS
++CFLAGS+=--param=l1-cache-size=16 --param=l1-cache-line-size=32
++CFLAGS+=--param=simultaneous-prefetches=2
++endif
++
++# Differential copy: FastDoom-style frame diffing
++# Only writes changed rows to display, reducing SPI bandwidth
++# Enable with DIFF_COPY=1
++ifdef DIFF_COPY
++CFLAGS+=-DDIFF_COPY_ENABLED
++endif
++
 +LDFLAGS+=-static
 +LIBS+=-lm -lc
++
++# =============================================================================
++# PAGER OPTIMIZATION FLAGS
++# =============================================================================
++#
++# DEFAULT CONFIGURATION (optimized based on quantitative A/B testing):
++#   - LTO enabled (-flto)
++#   - GCC auto-prefetch ENABLED (-fprefetch-loop-arrays) - works great with LTO
++#   - Manual render prefetch DISABLED (-DNO_RENDER_PREFETCH) - conflicts with GCC
++#   - Cache-aligned arrays ENABLED (-DCACHE_ALIGN_ARRAYS) - vissprites, drawsegs
++#   - Cache-optimized mobj_t layout ENABLED
++#
++# See perf/OPTIMIZATION_RESEARCH.md for detailed analysis.
++#
++# -----------------------------------------------------------------------------
++# BENCHMARK RESULTS (subjective +/++/+++ scoring)
++# -----------------------------------------------------------------------------
++#   LTO + GCC prefetch + aligned arrays: +++ (BEST)
++#   LTO + GCC prefetch (01a418b code):   ++
++#   LTO + manual render prefetch:        +
++#   MIPS16 compressed instructions:      - (code density not worth overhead)
++#
++# -----------------------------------------------------------------------------
++# EXPERIMENTAL FLAGS (tested, NOT recommended for production)
++# -----------------------------------------------------------------------------
++# These were tested and found to hurt or not help performance:
++#
++#   -DINLINE_FIXED_MATH        Inline FixedMul/FixedDiv - no measurable benefit
++#   -DTHINKER_PREFETCH_ENABLED Prefetch in P_RunThinkers - no measurable benefit
++#   -DAI_THROTTLE_SIMPLE       FastDoom AI throttle - HURTS (min 8 FPS, 4 drops)
++#   -DAI_THROTTLE_TIERED       3-tier AI throttle - HURTS (min 16 FPS, 1 drop)
++#   -DDOUBLE_BUFFER_ENABLED    Double buffering - HURTS (subjective ---)
++#   -DDIRTY_RECTANGLE_ENABLED  Dirty rectangles - no benefit on SPI
++#   -mips16                    MIPS16 compressed - HURTS (overhead > I-cache benefit)
++#   MANUAL_RENDER_PREFETCH=1   Manual prefetch - conflicts with GCC prefetch
++#
++# -----------------------------------------------------------------------------
++# OPTIONAL FLAGS (for specific use cases)
++# -----------------------------------------------------------------------------
++#   -DMOBJ_ORIGINAL_LAYOUT     Revert to vanilla mobj_t field order (for testing)
++#   -DNO_RENDER_PREFETCH       Disable render loop prefetching
++#   -DADAPTIVE_VISPLANES       Dynamic visplane limits (for SIGIL compatibility)
++#   -DUNCAPPED_FPS             Remove 35 FPS cap (for benchmarking)
++#   -DFPS_DEBUG_ENABLED        Enable FPS logging to /tmp/doom_fps.log
++#   -DVSYNC_ENABLED            Force VSync (very slow, ~10 FPS)
++#
++ifdef EXTRA_CFLAGS
++CFLAGS+=$(EXTRA_CFLAGS)
++endif
 +
 +# subdirectory for objects
 +OBJDIR=build
 +OUTPUT=doomgeneric
 +
 +SRC_DOOM = dummy.o am_map.o doomdef.o doomstat.o dstrings.o d_event.o d_items.o d_iwad.o d_loop.o d_main.o d_mode.o d_net.o f_finale.o f_wipe.o g_game.o hu_lib.o hu_stuff.o info.o i_cdmus.o i_endoom.o i_joystick.o i_scale.o i_sound.o i_system.o i_timer.o memio.o m_argv.o m_bbox.o m_cheat.o m_config.o m_controls.o m_fixed.o m_menu.o m_misc.o m_random.o p_ceilng.o p_doors.o p_enemy.o p_floor.o p_inter.o p_lights.o p_map.o p_maputl.o p_mobj.o p_plats.o p_pspr.o p_saveg.o p_setup.o p_sight.o p_spec.o p_switch.o p_telept.o p_tick.o p_user.o r_bsp.o r_data.o r_draw.o r_main.o r_plane.o r_segs.o r_sky.o r_things.o sha1.o sounds.o statdump.o st_lib.o st_stuff.o s_sound.o tables.o v_video.o wi_stuff.o w_checksum.o w_file.o w_main.o w_wad.o z_zone.o w_file_stdc.o i_input.o i_video.o doomgeneric.o doomgeneric_linuxvt.o mus2mid.o
++
++# Network sources for multiplayer support
++SRC_NET = net_packet.o net_io.o net_socket.o net_client.o net_server.o net_loop.o net_query.o net_dedicated.o net_lobby.o
++
 +OBJS += $(addprefix $(OBJDIR)/, $(SRC_DOOM))
++OBJS += $(addprefix $(OBJDIR)/, $(SRC_NET))
 +
 +all:	 $(OUTPUT)
 +
@@ -62,6 +197,8 @@ index 0000000..49f4364
 +	@echo [Linking $@]
 +	$(VB)$(CC) $(CFLAGS) $(LDFLAGS) $(OBJS) \
 +	-o $(OUTPUT) $(LIBS)
++	@echo [Stripping debug symbols]
++	$(VB)mipsel-linux-gnu-strip $(OUTPUT) 2>/dev/null || strip $(OUTPUT) 2>/dev/null || true
 +	@echo [Size]
 +	-@size $(OUTPUT) 2>/dev/null || true
 +
@@ -77,8 +214,408 @@ index 0000000..49f4364
 +print:
 +	@echo OBJS: $(OBJS)
 +
+diff --git a/doomgeneric/d_loop.c b/doomgeneric/d_loop.c
+index 1939dbd..9ba0270 100644
+--- a/doomgeneric/d_loop.c
++++ b/doomgeneric/d_loop.c
+@@ -37,9 +37,16 @@
+ #include "net_io.h"
+ #include "net_query.h"
+ #include "net_server.h"
+-#include "net_sdl.h"
++#include "net_socket.h"  // Use POSIX sockets instead of SDL_net
+ #include "net_loop.h"
+ 
++// External declarations for network settings received from server
++extern net_gamesettings_t received_settings;
++extern boolean received_settings_valid;
++
++// Server browser and lobby UI
++#include "net_lobby.h"
++
+ // The complete set of data for a particular tic.
+ 
+ typedef struct
+@@ -437,15 +444,99 @@ void D_StartNetGame(net_gamesettings_t *settings,
+     //    printf("Syncing netgames like Vanilla Doom.\n");
+     //}
+ #else
+-    settings->consoleplayer = 0;
+-	settings->num_players = 1;
+-	settings->player_classes[0] = player_class;
+-	settings->new_sync = 0;
+-	settings->extratics = 1;
+-	settings->ticdup = 1;
+-
+-	ticdup = settings->ticdup;
+-	new_sync = settings->new_sync;
++#ifdef FEATURE_MULTIPLAYER
++    // If we're connected to a network game, send GAMESTART and wait for response
++    if (net_client_connected)
++    {
++        // Use command-line values (from d_main.c) for game settings
++        extern int startepisode;
++        extern int startmap;
++        extern int startskill;
++        extern int nomonsters;
++        extern int fastparm;
++        extern int respawnparm;
++        extern int timelimit;
++        
++        // Fill in settings to send to server
++        settings->ticdup = 1;
++        settings->extratics = 1;
++        settings->deathmatch = 1;  // Deathmatch mode
++        settings->episode = startepisode;
++        settings->map = startmap;
++        settings->skill = startskill;
++        settings->nomonsters = nomonsters;
++        settings->fast_monsters = fastparm;
++        settings->respawn_monsters = respawnparm;
++        settings->timelimit = timelimit;
++        settings->loadgame = -1;
++        settings->lowres_turn = 0;
++        settings->new_sync = 0;
++        settings->gameversion = 0;
++        settings->player_classes[0] = player_class;
++        
++        // Send GAMESTART and wait for server's response
++        extern void NET_CL_SendStartAndWait(net_gamesettings_t *settings);
++        NET_CL_SendStartAndWait(settings);
++        
++        // Now use the received settings from server
++        if (received_settings_valid)
++        {
++            // Copy all settings from what the server sent us
++            settings->consoleplayer = received_settings.consoleplayer;
++            settings->num_players = received_settings.num_players;
++            settings->deathmatch = received_settings.deathmatch;
++            settings->episode = received_settings.episode;
++            settings->map = received_settings.map;
++            settings->skill = received_settings.skill;
++            settings->nomonsters = received_settings.nomonsters;
++            settings->fast_monsters = received_settings.fast_monsters;
++            settings->respawn_monsters = received_settings.respawn_monsters;
++            settings->timelimit = received_settings.timelimit;
++            settings->loadgame = received_settings.loadgame;
++            settings->lowres_turn = received_settings.lowres_turn;
++            settings->new_sync = received_settings.new_sync;
++            settings->extratics = received_settings.extratics;
++            settings->ticdup = received_settings.ticdup;
++            
++            for (int i = 0; i < NET_MAXPLAYERS; i++)
++                settings->player_classes[i] = received_settings.player_classes[i];
++            
++            printf("D_StartNetGame: Using network settings - player %d of %d\n",
++                   settings->consoleplayer + 1, settings->num_players);
++            
++            // CRITICAL: Set localplayer so we control our own character!
++            localplayer = settings->consoleplayer;
++            
++            // Set playeringame for all players
++            for (int i = 0; i < NET_MAXPLAYERS; i++)
++                local_playeringame[i] = i < settings->num_players;
++        }
++        else
++        {
++            // Server didn't send game settings - likely a game is already in progress
++            // or there was a connection issue. Exit cleanly with error message.
++            I_Error("Failed to start network game!\n\n"
++                    "The server did not send game settings.\n"
++                    "Another game may already be in progress.\n"
++                    "Try again or connect to a different server.");
++        }
++    }
++    else
++#endif
++    {
++        // Single player defaults
++        settings->consoleplayer = 0;
++        settings->num_players = 1;
++        settings->player_classes[0] = player_class;
++        settings->new_sync = 0;
++        settings->extratics = 1;
++        settings->ticdup = 1;
++        localplayer = 0;
++        local_playeringame[0] = true;
++    }
++
++    ticdup = settings->ticdup;
++    new_sync = settings->new_sync;
+ #endif
+ }
+ 
+@@ -476,7 +567,7 @@ boolean D_InitNetGame(net_connect_data_t *connect_data)
+     {
+         NET_SV_Init();
+         NET_SV_AddModule(&net_loop_server_module);
+-        NET_SV_AddModule(&net_sdl_module);
++        NET_SV_AddModule(&net_socket_module);
+         NET_SV_RegisterWithMaster();
+ 
+         net_loop_client_module.InitClient();
+@@ -484,6 +575,21 @@ boolean D_InitNetGame(net_connect_data_t *connect_data)
+     }
+     else
+     {
++        //!
++        // @arg <name>
++        // @category net
++        //
++        // Set the player name for multiplayer games.
++        // Parse this early so it applies to all connection modes.
++        //
++
++        i = M_CheckParmWithArgs("-name", 1);
++
++        if (i > 0)
++        {
++            net_player_name = myargv[i+1];
++        }
++
+         //!
+         // @category net
+         //
+@@ -503,6 +609,159 @@ boolean D_InitNetGame(net_connect_data_t *connect_data)
+             }
+         }
+ 
++        //!
++        // @category net
++        //
++        // Show server browser UI to select a server to join.
++        //
++
++        i = M_CheckParm("-browse");
++
++        if (i > 0)
++        {
++            const char *selected_addr = NULL;
++            int input;
++            boolean stay_in_browser = true;
++            
++            printf("Starting server browser...\n");
++            
++            // Initialize browser once
++            DG_Browser_Init();
++            
++            // Main browser loop - returns here if user quits lobby
++            while (stay_in_browser)
++            {
++                selected_addr = NULL;
++                addr = NULL;
++                
++                DG_Browser_Refresh();
++                
++                // Browser selection loop
++                while (1)
++                {
++                    DG_Browser_Update();
++                    DG_DrawBrowser();
++                    
++                    input = DG_CheckLobbyInput();
++                    
++                    if (input == 1)  // Green button - select/join
++                    {
++                        selected_addr = DG_Browser_GetSelectedAddress();
++                        if (selected_addr != NULL)
++                        {
++                            printf("Selected server: %s\n", selected_addr);
++                            DG_DrawConnecting(selected_addr);
++                            break;
++                        }
++                    }
++                    else if (input == -1)  // Red button - exit game
++                    {
++                        printf("Browser cancelled\n");
++                        DG_DrawExiting();
++                        I_Quit();
++                    }
++                    else if (input == 2)  // Up
++                    {
++                        DG_Browser_SelectUp();
++                    }
++                    else if (input == 3)  // Down
++                    {
++                        DG_Browser_SelectDown();
++                    }
++                    
++                    I_Sleep(16);  // ~60fps
++                }
++                
++                if (selected_addr != NULL)
++                {
++                    net_socket_module.InitClient();
++                    addr = net_socket_module.ResolveAddress((char *)selected_addr);
++                    
++                    if (addr == NULL)
++                    {
++                        printf("Unable to resolve '%s', returning to browser\n", selected_addr);
++                        continue;  // Back to browser
++                    }
++                    
++                    // Try to connect
++                    if (!NET_CL_Connect(addr, connect_data))
++                    {
++                        printf("Failed to connect to %s, returning to browser\n", selected_addr);
++                        continue;  // Back to browser
++                    }
++                    
++                    printf("Connected to %s, entering lobby...\n", NET_AddrToString(addr));
++                    
++                    // Wait in lobby - returns false if user presses RED to quit
++                    if (NET_WaitForLaunch())
++                    {
++                        // Game is starting!
++                        stay_in_browser = false;
++                        result = true;
++                    }
++                    else
++                    {
++                        // User quit lobby - go back to browser
++                        printf("Returning to server browser...\n");
++                        // Connection already closed by NET_WaitForLaunch
++                        // Reset query system so it reinitializes the socket
++                        NET_Query_Shutdown();
++                    }
++                }
++            }
++            
++            // Skip the normal connect/wait flow below since we handled it
++            return result;
++        }
++
++        //!
++        // @category net
++        //
++        // Automatically find and join the best available server.
++        // Uses smart matching to prefer servers with 1-2 players waiting.
++        //
++
++        i = M_CheckParm("-automatch");
++
++        if (i > 0)
++        {
++            const char *best_addr = NULL;
++            
++            printf("Starting auto-matchmaking...\n");
++            DG_DrawAutoMatch();
++            
++            // Initialize and query servers
++            NET_Query_Init();
++            NET_Query_RunAll();  // Blocking query
++            
++            // Find best server
++            best_addr = DG_Browser_GetAutoMatchAddress();
++            
++            if (best_addr == NULL)
++            {
++                printf("No suitable server found!\n");
++                DG_DrawNoServers();
++                
++                // Wait for input then exit
++                while (DG_CheckLobbyInput() == 0)
++                {
++                    I_Sleep(50);
++                }
++                I_Quit();
++            }
++            
++            printf("Auto-matched to: %s\n", best_addr);
++            DG_DrawConnecting(best_addr);
++            
++            net_socket_module.InitClient();
++            addr = net_socket_module.ResolveAddress((char *)best_addr);
++            
++            if (addr == NULL)
++            {
++                I_Error("Unable to resolve '%s'\n", best_addr);
++            }
++        }
++
+         //!
+         // @arg <address>
+         // @category net
+@@ -515,8 +774,8 @@ boolean D_InitNetGame(net_connect_data_t *connect_data)
+ 
+         if (i > 0)
+         {
+-            net_sdl_module.InitClient();
+-            addr = net_sdl_module.ResolveAddress(myargv[i+1]);
++            net_socket_module.InitClient();
++            addr = net_socket_module.ResolveAddress(myargv[i+1]);
+ 
+             if (addr == NULL)
+             {
+@@ -541,10 +800,17 @@ boolean D_InitNetGame(net_connect_data_t *connect_data)
+         printf("D_InitNetGame: Connected to %s\n", NET_AddrToString(addr));
+ 
+         // Wait for launch message received from server.
++        // Returns false if user quit the lobby with RED button.
+ 
+-        NET_WaitForLaunch();
+-
+-        result = true;
++        if (NET_WaitForLaunch())
++        {
++            result = true;
++        }
++        else
++        {
++            printf("D_InitNetGame: User quit lobby, exiting.\n");
++            I_Quit();
++        }
+     }
+ #endif
+ 
+diff --git a/doomgeneric/d_loop.h b/doomgeneric/d_loop.h
+index eb87d84..279a7cb 100644
+--- a/doomgeneric/d_loop.h
++++ b/doomgeneric/d_loop.h
+@@ -77,5 +77,14 @@ void D_StartNetGame(net_gamesettings_t *settings,
+ extern boolean singletics;
+ extern int gametic, ticdup;
+ 
++// Receive ticcmds from network
++void D_ReceiveTic(ticcmd_t *ticcmds, boolean *players_mask);
++
++// Wait for game launch signal
++boolean NET_WaitForLaunch(void);
++
++// LAN server discovery
++net_addr_t *NET_FindLANServer(void);
++
+ #endif
+ 
+diff --git a/doomgeneric/doomdef.h b/doomgeneric/doomdef.h
+index 62d729d..bbba73e 100644
+--- a/doomgeneric/doomdef.h
++++ b/doomgeneric/doomdef.h
+@@ -39,7 +39,8 @@
+ 
+ // If rangecheck is undefined,
+ // most parameter validation debugging code will not be compiled
+-#define RANGECHECK
++// Disabled for BFG Edition compatibility (560px wide title screens)
++// #define RANGECHECK
+ 
+ // The maximum number of players, multiplayer/networking.
+ #define MAXPLAYERS 4
+diff --git a/doomgeneric/doomfeatures.h b/doomgeneric/doomfeatures.h
+index dff6936..724210e 100644
+--- a/doomgeneric/doomfeatures.h
++++ b/doomgeneric/doomfeatures.h
+@@ -29,7 +29,7 @@
+ 
+ // Enables multiplayer support (network games)
+ 
+-#undef FEATURE_MULTIPLAYER
++#define FEATURE_MULTIPLAYER
+ 
+ // Enables sound output
+ 
 diff --git a/doomgeneric/doomgeneric_linuxvt.c b/doomgeneric/doomgeneric_linuxvt.c
-index ed94dd9..f3e25d9 100644
+index ed94dd9..6ca4c87 100644
 --- a/doomgeneric/doomgeneric_linuxvt.c
 +++ b/doomgeneric/doomgeneric_linuxvt.c
 @@ -6,6 +6,8 @@
@@ -98,7 +635,12 @@ index ed94dd9..f3e25d9 100644
  #include <string.h>
  #include <unistd.h>
  #include <errno.h>
-@@ -58,6 +61,9 @@
+@@ -54,13 +57,35 @@
+ #include <dirent.h>
+ #include <sys/mman.h>
+ #include <sys/time.h>
++#include <time.h>
+ #include <sys/ioctl.h>
  #include <linux/input.h>
  #include <linux/input-event-codes.h>
  #include <linux/fb.h>
@@ -108,15 +650,62 @@ index ed94dd9..f3e25d9 100644
  
  #include <stdbool.h>
  
-@@ -74,8 +80,43 @@ static struct timeval startTime;
++// External references to video buffers from i_video.c for optimized rendering
++// I_VideoBuffer: 8-bit indexed palette buffer (320x200)
++// rgb565_palette: Precomputed RGB565 lookup table (256 entries)
++extern byte *I_VideoBuffer;
++extern uint16_t rgb565_palette[256];
++
++// MIPS 24KEc has 32-byte cache lines - align hot buffers for optimal performance
++#define CACHE_LINE_SIZE 32
++
++// Helper for cache-aligned allocation (reduces cache line splits)
++static inline void *aligned_alloc_cached(size_t size) {
++    void *ptr;
++    // posix_memalign returns memory aligned to CACHE_LINE_SIZE boundary
++    if (posix_memalign(&ptr, CACHE_LINE_SIZE, size) != 0)
++        return NULL;
++    return ptr;
++}
++
+ #define KEYQUEUE_SIZE 16
  
+ #define MAX_INPUT_DEVS 16
+@@ -72,10 +97,68 @@
+ // timing stuff
+ static struct timeval startTime;
+ 
++// FPS and timing tracking (writes to file, not stderr - stderr crashes SIGIL!)
++static uint32_t frameCount = 0;
++static uint32_t lastFpsTime = 0;
++static uint32_t currentFps = 0;
++static uint32_t totalWriteTimeMs = 0;  // Accumulated write() time
++static uint32_t avgWriteTimeMs = 0;    // Average write time per frame
++static int useVsync = 0;               // If 1, fsync after write (no tearing but ~10 FPS)
++static int fpsFd = -1;                 // File descriptor for FPS logging
++static int useFpsDebug = 0;            // If 1, enable FPS logging (disabled by default)
++#define FPS_UPDATE_INTERVAL_MS 1000  // Update FPS every second
++
++// Frame rate cap - default 35 FPS (DOOM's native TICRATE)
++// Configurable via -fps N (0 = uncapped, 35 = DOOM native)
++// Uses clock_nanosleep with absolute timing for precise, consistent frame pacing
++#define DEFAULT_TARGET_FPS 35
++static int targetFps = DEFAULT_TARGET_FPS;
++static long frameTimeNs = 1000000000L / DEFAULT_TARGET_FPS;  // ~28.57ms in nanoseconds
++static struct timespec nextFrameTime;  // For clock_nanosleep absolute timing
++static int useFrameCap = 1;    // Enabled by default (35 FPS)
++
  // framebuffer stuff 
  static uint8_t *fbPtr;
-+static uint16_t *renderBuffer = NULL;  // Local render buffer for 16-bit mode
-+static unsigned int renderBufferSize = 0;
- static int fbFd;
+-static int fbFd;
+-static unsigned int fbWidth, fbHeight, fbStride, fbBytesPerPixel, fbOffsetX, fbOffsetY;
++// These are non-static so net_lobby.c can access them for lobby drawing
++uint16_t *renderBuffer = NULL;  // Local render buffer for 16-bit mode
++size_t renderBufferSize = 0;
++int fbFd;
 +static int ttyFd = -1;  // TTY for graphics mode switching
- static unsigned int fbWidth, fbHeight, fbStride, fbBytesPerPixel, fbOffsetX, fbOffsetY;
++unsigned int fbWidth, fbHeight;  // Non-static for net_lobby.c access
++static unsigned int fbStride, fbBytesPerPixel, fbOffsetX, fbOffsetY;
 +static int fbIs16Bit = 0; // 1 if framebuffer is 16-bit RGB565
 +
 +// Precomputed lookup tables for scaling (avoids per-pixel division)
@@ -146,13 +735,14 @@ index ed94dd9..f3e25d9 100644
 +	if (srcYLookup) free(srcYLookup);
 +	if (srcXLookupAspect) free(srcXLookupAspect);
 +	if (srcYLookupAspect) free(srcYLookupAspect);
++	if (fpsFd >= 0) close(fpsFd);
 +	if (fbFd >= 0) close(fbFd);
 +	_exit(sig ? 128 + sig : 0);
 +}
  
  // input stuff
  static int numInputFds = 0;
-@@ -87,6 +128,16 @@ static unsigned short s_KeyQueue[KEYQUEUE_SIZE];
+@@ -87,6 +170,23 @@ static unsigned short s_KeyQueue[KEYQUEUE_SIZE];
  static unsigned int s_KeyQueueWriteIndex = 0;
  static unsigned int s_KeyQueueReadIndex = 0;
  
@@ -166,10 +756,17 @@ index ed94dd9..f3e25d9 100644
 +static int dpadLeftPressed = 0;
 +static int dpadRightPressed = 0;
 +
++// Track active combo key (to release when Green is released)
++static int comboKeyActive = 0;
++
++// Prefetch optimization - enabled by default for better cache performance
++// Use -noprefetch to disable if issues occur
++static int usePrefetch = 1;
++
  // XXX: HACK
  // Linux's evdev system doesn't make it feasible to just use
  // tolower(key) like the existing conversions did, so we
-@@ -197,6 +248,14 @@ static unsigned char convertToDoomKey(unsigned int key){
+@@ -197,6 +297,14 @@ static unsigned char convertToDoomKey(unsigned int key){
  			key = DOOM_KEY_TAB;
  			break;
  
@@ -184,7 +781,7 @@ index ed94dd9..f3e25d9 100644
  		// sadly, yes, we need to handle every single alphanumeric
  		// key here, since evdev doesn't spit out keys in anything
  		// remotely resembling ASCII.....
-@@ -273,11 +332,73 @@ static unsigned char convertToDoomKey(unsigned int key){
+@@ -273,11 +381,112 @@ static unsigned char convertToDoomKey(unsigned int key){
  	return key;
  }
  
@@ -198,7 +795,46 @@ index ed94dd9..f3e25d9 100644
 +	if (keyCode == 0x130) {  // Red button
 +		redButtonPressed = pressed;
 +	} else if (keyCode == 0x131) {  // Green button
++		int wasGreen = greenButtonPressed;
 +		greenButtonPressed = pressed;
++		
++		// When Green is PRESSED while D-pad already held, switch to strafe
++		if (!wasGreen && pressed) {
++			unsigned char comboKey = 0;
++			unsigned char arrowKey = 0;
++			if (dpadLeftPressed) { comboKey = KEY_STRAFE_L; arrowKey = KEY_LEFTARROW; }
++			else if (dpadRightPressed) { comboKey = KEY_STRAFE_R; arrowKey = KEY_RIGHTARROW; }
++			
++			if (comboKey) {
++				// Release arrow key first (stop turning)
++				unsigned short releaseArrow = (0 << 8) | arrowKey;
++				s_KeyQueue[s_KeyQueueWriteIndex] = releaseArrow;
++				s_KeyQueueWriteIndex = (s_KeyQueueWriteIndex + 1) % KEYQUEUE_SIZE;
++				// Then press strafe
++				comboKeyActive = comboKey;
++				unsigned short pressCombo = (1 << 8) | comboKey;
++				s_KeyQueue[s_KeyQueueWriteIndex] = pressCombo;
++				s_KeyQueueWriteIndex = (s_KeyQueueWriteIndex + 1) % KEYQUEUE_SIZE;
++			}
++		}
++		
++		// When Green is RELEASED, release combo and resume arrow if D-pad held
++		if (wasGreen && !pressed && comboKeyActive) {
++			unsigned short releaseCombo = (0 << 8) | comboKeyActive;
++			s_KeyQueue[s_KeyQueueWriteIndex] = releaseCombo;
++			s_KeyQueueWriteIndex = (s_KeyQueueWriteIndex + 1) % KEYQUEUE_SIZE;
++			
++			// Resume turning if D-pad still held
++			unsigned char arrowKey = 0;
++			if (dpadLeftPressed) arrowKey = KEY_LEFTARROW;
++			else if (dpadRightPressed) arrowKey = KEY_RIGHTARROW;
++			if (arrowKey) {
++				unsigned short pressArrow = (1 << 8) | arrowKey;
++				s_KeyQueue[s_KeyQueueWriteIndex] = pressArrow;
++				s_KeyQueueWriteIndex = (s_KeyQueueWriteIndex + 1) % KEYQUEUE_SIZE;
++			}
++			comboKeyActive = 0;
++		}
 +	}
 +	
 +	// Track D-pad states
@@ -216,50 +852,98 @@ index ed94dd9..f3e25d9 100644
 +		return;  // Don't also send the individual button
 +	}
 +	
-+	// Green + D-pad combos (when green is held)
++	// Green + D-pad combos (when green is held and D-pad pressed)
 +	if (greenButtonPressed && pressed) {
 +		unsigned char comboKey = 0;
 +		
 +		if (keyCode == KEY_UP) {
-+			comboKey = KEY_USE;  // Open doors/switches (0xa2)
++			comboKey = KEY_USE;  // Open doors/switches
 +		} else if (keyCode == KEY_DOWN) {
 +			comboKey = DOOM_KEY_TAB;  // Automap toggle
 +		} else if (keyCode == KEY_LEFT) {
-+			comboKey = KEY_STRAFE_L;  // Strafe left (0xa0)
++			comboKey = KEY_STRAFE_L;  // Strafe left
 +		} else if (keyCode == KEY_RIGHT) {
-+			comboKey = KEY_STRAFE_R;  // Strafe right (0xa1)
++			comboKey = KEY_STRAFE_R;  // Strafe right
 +		}
 +		
 +		if (comboKey != 0) {
++			comboKeyActive = comboKey;
 +			unsigned short comboData = (1 << 8) | comboKey;
 +			s_KeyQueue[s_KeyQueueWriteIndex] = comboData;
-+			s_KeyQueueWriteIndex++;
-+			s_KeyQueueWriteIndex %= KEYQUEUE_SIZE;
++			s_KeyQueueWriteIndex = (s_KeyQueueWriteIndex + 1) % KEYQUEUE_SIZE;
 +			return;  // Don't send the regular D-pad key
 +		}
 +	}
 +	
-+	// Handle key release for combo keys (need to release the combo key too)
-+	if (greenButtonPressed && !pressed) {
++	// Handle D-pad release while in combo mode
++	if (!pressed && comboKeyActive) {
 +		unsigned char comboKey = 0;
 +		
-+		if (keyCode == KEY_UP) comboKey = KEY_USE;
-+		else if (keyCode == KEY_DOWN) comboKey = DOOM_KEY_TAB;
-+		else if (keyCode == KEY_LEFT) comboKey = KEY_STRAFE_L;
-+		else if (keyCode == KEY_RIGHT) comboKey = KEY_STRAFE_R;
++		if (keyCode == KEY_UP && comboKeyActive == KEY_USE) comboKey = KEY_USE;
++		else if (keyCode == KEY_DOWN && comboKeyActive == DOOM_KEY_TAB) comboKey = DOOM_KEY_TAB;
++		else if (keyCode == KEY_LEFT && comboKeyActive == KEY_STRAFE_L) comboKey = KEY_STRAFE_L;
++		else if (keyCode == KEY_RIGHT && comboKeyActive == KEY_STRAFE_R) comboKey = KEY_STRAFE_R;
 +		
 +		if (comboKey != 0) {
 +			unsigned short comboData = (0 << 8) | comboKey;  // Release
 +			s_KeyQueue[s_KeyQueueWriteIndex] = comboData;
-+			s_KeyQueueWriteIndex++;
-+			s_KeyQueueWriteIndex %= KEYQUEUE_SIZE;
++			s_KeyQueueWriteIndex = (s_KeyQueueWriteIndex + 1) % KEYQUEUE_SIZE;
++			comboKeyActive = 0;
 +			return;
 +		}
 +	}
  		
  	unsigned char key = convertToDoomKey(keyCode);
  	if (key == 0xFF) // unknown, don't process it
-@@ -353,10 +474,17 @@ static int isKeyboard(const char *devPath) {
+@@ -323,6 +532,47 @@ static void checkKeys() {
+ 	return;
+ }
+ 
++// Check for lobby-specific input:
++//   1  = GREEN (select/join)
++//  -1  = RED (back/quit)
++//   2  = UP (navigate up)
++//   3  = DOWN (navigate down)
++//   4  = LEFT (unused)
++//   5  = RIGHT (unused)
++//   0  = nothing
++// Pager buttons: 0x131 (305) = GREEN button, 0x130 (304) = RED button
++int DG_CheckLobbyInput(void)
++{
++	int ret, i;
++	struct input_event ev;
++	int result = 0;
++	
++	ret = poll(pollfds, numInputFds, 0);
++	if (ret <= 0) return 0;
++	
++	for (i = 0; i < MAX_INPUT_DEVS; i++) {
++		if (pollfds[i].revents & POLLIN) {
++			read(inputFds[i], &ev, sizeof(ev));
++			if (ev.type == EV_KEY && ev.value == 1) {  // Key press
++				// Use exact codes: 0x131 = GREEN, 0x130 = RED
++				if (ev.code == 0x131 || ev.code == KEY_SPACE || ev.code == KEY_ENTER) {
++					result = 1;  // GREEN = Start/Select
++				} else if (ev.code == 0x130 || ev.code == KEY_ESC) {
++					result = -1; // RED = Back/Quit
++				} else if (ev.code == KEY_UP) {
++					result = 2;  // UP = Navigate up
++				} else if (ev.code == KEY_DOWN) {
++					result = 3;  // DOWN = Navigate down
++				} else if (ev.code == KEY_LEFT) {
++					result = 4;  // LEFT
++				} else if (ev.code == KEY_RIGHT) {
++					result = 5;  // RIGHT
++				}
++			}
++		}
++	}
++	return result;
++}
+ 
+ #define TEST_KEY(k) (keybits[(k)/8] & (1 << ((k)%8)))
+ static int isKeyboard(const char *devPath) {
+@@ -353,10 +603,17 @@ static int isKeyboard(const char *devPath) {
  		return 0;
  	}
  
@@ -277,10 +961,48 @@ index ed94dd9..f3e25d9 100644
  
  	close(fd);
  	return 0;
-@@ -409,6 +537,30 @@ void DG_Init() {
+@@ -409,6 +666,68 @@ void DG_Init() {
  	struct fb_var_screeninfo info;
  	struct fb_fix_screeninfo finfo;
  
++	// Check for -vsync command line arg (uses fsync for tear-free but ~10 FPS)
++	if (M_CheckParm("-vsync")) {
++		useVsync = 1;
++		printf("VSync enabled (tear-free but slower)\n");
++	}
++	
++	// Prefetch control (enabled by default for better cache performance)
++	if (M_CheckParm("-noprefetch")) {
++		usePrefetch = 0;
++		printf("Prefetch disabled\n");
++	}
++
++	// Check for -fps N to override default frame rate cap
++	// Default: 35 FPS (DOOM native). Use -fps 0 for uncapped.
++	int fpsArg = M_CheckParmWithArgs("-fps", 1);
++	if (fpsArg) {
++		targetFps = atoi(myargv[fpsArg + 1]);
++		if (targetFps > 0) {
++			useFrameCap = 1;
++			frameTimeNs = 1000000000L / targetFps;
++			printf("Frame cap: %d FPS (%ldms/frame)\n", targetFps, frameTimeNs / 1000000L);
++		} else {
++			useFrameCap = 0;
++			printf("Uncapped framerate\n");
++		}
++	} else {
++		printf("Frame cap: %d FPS (default, use -fps N to change)\n", DEFAULT_TARGET_FPS);
++	}
++
++	// Check for -fpsdebug to enable FPS logging
++	if (M_CheckParm("-fpsdebug")) {
++		useFpsDebug = 1;
++		printf("FPS debug logging enabled (/tmp/fps.log)\n");
++	}
++
++	// Initialize precise frame timing using clock_nanosleep
++	clock_gettime(CLOCK_MONOTONIC, &nextFrameTime);
++
 +	// Set up signal handlers for clean exit
 +	signal(SIGINT, cleanup_and_exit);
 +	signal(SIGTERM, cleanup_and_exit);
@@ -308,7 +1030,7 @@ index ed94dd9..f3e25d9 100644
  	//
  	// set up the framebuffer
  	//
-@@ -434,19 +586,96 @@ void DG_Init() {
+@@ -434,19 +753,99 @@ void DG_Init() {
  	fbWidth = info.xres;
  	fbHeight = info.yres;
  	fbBytesPerPixel = info.bits_per_pixel / 8;
@@ -319,8 +1041,9 @@ index ed94dd9..f3e25d9 100644
 +		printf("Framebuffer: %dx%d, 16-bit RGB565\n", fbWidth, fbHeight);
 +		
 +		// Use write() for SPI displays - mmap causes glitches with fbtft
++		// OPTIMIZED: Cache-aligned allocation for better memory access patterns
 +		renderBufferSize = fbWidth * fbHeight * sizeof(uint16_t);
-+		renderBuffer = (uint16_t *)malloc(renderBufferSize);
++		renderBuffer = (uint16_t *)aligned_alloc_cached(renderBufferSize);
 +		if (!renderBuffer)
 +			I_Error("Failed to allocate render buffer");
 +		memset(renderBuffer, 0, renderBufferSize);
@@ -341,8 +1064,9 @@ index ed94dd9..f3e25d9 100644
 +		scaledOffY = 0;  // No offset, fills entire screen
 +		
 +		// Precompute lookup tables for STRETCHED scaling + rotation (gameplay)
-+		srcXLookup = (unsigned int *)malloc(scaledOutH * sizeof(unsigned int));
-+		srcYLookup = (unsigned int *)malloc(scaledOutW * sizeof(unsigned int));
++		// OPTIMIZED: Cache-aligned for sequential reads in render loop
++		srcXLookup = (unsigned int *)aligned_alloc_cached(scaledOutH * sizeof(unsigned int));
++		srcYLookup = (unsigned int *)aligned_alloc_cached(scaledOutW * sizeof(unsigned int));
 +		
 +		// For each display row (y), compute which Doom column (X) to sample
 +		// Display Y maps to Doom X: srcX = y * DoomWidth / displayHeight
@@ -370,8 +1094,9 @@ index ed94dd9..f3e25d9 100644
 +		if (aspectOutH > fbHeight) aspectOutH = fbHeight;
 +		aspectOffY = (fbHeight - aspectOutH) / 2;  // Center vertically: (480 - 355) / 2 = 62
 +		
-+		srcXLookupAspect = (unsigned int *)malloc(aspectOutH * sizeof(unsigned int));
-+		srcYLookupAspect = (unsigned int *)malloc(aspectOutW * sizeof(unsigned int));
++		// OPTIMIZED: Cache-aligned lookup tables
++		srcXLookupAspect = (unsigned int *)aligned_alloc_cached(aspectOutH * sizeof(unsigned int));
++		srcYLookupAspect = (unsigned int *)aligned_alloc_cached(aspectOutW * sizeof(unsigned int));
 +		
 +		// For each output row in the aspect-correct region, which Doom X to sample
 +		for (unsigned int y = 0; y < aspectOutH; y++) {
@@ -415,20 +1140,17 @@ index ed94dd9..f3e25d9 100644
  
  	//
  	// set up input
-@@ -460,16 +689,91 @@ void DG_Init() {
+@@ -460,16 +859,145 @@ void DG_Init() {
  	gettimeofday(&startTime, NULL);
  }
  
-+// Convert 32-bit ARGB to 16-bit RGB565
++// Fallback: Convert 32-bit ARGB to 16-bit RGB565 (only used for 32-bit path)
 +static inline uint16_t rgb32_to_rgb565(uint32_t pixel) {
 +	uint8_t r = (pixel >> 16) & 0xFF;
 +	uint8_t g = (pixel >> 8) & 0xFF;
 +	uint8_t b = pixel & 0xFF;
 +	return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
 +}
-+
-+// Inline RGB8888 to RGB565 conversion
-+#define RGB888_TO_RGB565(p) (((p >> 8) & 0xF800) | ((p >> 5) & 0x07E0) | ((p >> 3) & 0x001F))
 +
  void DG_DrawFrame() {
 -	// we need to do it line-by-line like this to account for the
@@ -437,10 +1159,25 @@ index ed94dd9..f3e25d9 100644
 -	for (int line = 0; line < DOOMGENERIC_RESY; line++) {
 -		memcpy(
 -			(void *)((uintptr_t)(fbPtr) + (fbStride * line) + fbOffsetY + fbOffsetX),
++	// Frame rate cap using clock_nanosleep with absolute timing
++	// This provides precise, consistent frame pacing without drift
++	if (useFrameCap) {
++		nextFrameTime.tv_nsec += frameTimeNs;
++		while (nextFrameTime.tv_nsec >= 1000000000L) {
++			nextFrameTime.tv_nsec -= 1000000000L;
++			nextFrameTime.tv_sec++;
++		}
++		clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &nextFrameTime, NULL);
++	}
++
 +	if (fbIs16Bit) {
-+		// Optimized 16-bit RGB565 with 90° CCW rotation
-+		// Uses precomputed lookup tables to avoid per-pixel division
-+		uint32_t *srcBuf = (uint32_t *)DG_ScreenBuffer;
++		// OPTIMIZED 16-bit RGB565 path with 90° CCW rotation
++		// Uses precomputed palette lookup - reads directly from I_VideoBuffer (8-bit indexed)
++		// This bypasses DG_ScreenBuffer entirely, eliminating per-pixel RGB conversion!
++		byte *srcBuf = I_VideoBuffer;
++		
++		// Cache palette pointer locally for faster access
++		const uint16_t *palette = rgb565_palette;
 +		
 +		// Use aspect-correct rendering for title/menu screens, stretched for gameplay
 +		int useAspectCorrect = (gamestate != GS_LEVEL);
@@ -450,57 +1187,74 @@ index ed94dd9..f3e25d9 100644
 +			memset(renderBuffer, 0, renderBufferSize);
 +			
 +			// Render with correct aspect ratio (centered with vertical black bars)
++			// Direct palette lookup: srcBuf[y*320+x] -> palette[index]
 +			for (unsigned int y = 0; y < aspectOutH; y++) {
 +				uint16_t *dst = renderBuffer + (y + aspectOffY) * fbWidth;
-+				uint32_t *srcRow = srcBuf + srcXLookupAspect[y];
++				unsigned int srcX = srcXLookupAspect[y];
++				const unsigned int *yLookup = srcYLookupAspect;
 +				
-+				// Process 4 pixels at a time when possible
++				// Prefetch next row's lookup value
++				if (usePrefetch && y + 1 < aspectOutH) {
++					__builtin_prefetch(&srcXLookupAspect[y + 1], 0, 3);
++				}
++				
++				// Process 4 pixels at a time with direct palette lookup
 +				unsigned int x = 0;
 +				for (; x + 3 < aspectOutW; x += 4) {
-+					uint32_t p0 = srcRow[srcYLookupAspect[x] * DOOMGENERIC_RESX];
-+					uint32_t p1 = srcRow[srcYLookupAspect[x+1] * DOOMGENERIC_RESX];
-+					uint32_t p2 = srcRow[srcYLookupAspect[x+2] * DOOMGENERIC_RESX];
-+					uint32_t p3 = srcRow[srcYLookupAspect[x+3] * DOOMGENERIC_RESX];
-+					dst[x]   = RGB888_TO_RGB565(p0);
-+					dst[x+1] = RGB888_TO_RGB565(p1);
-+					dst[x+2] = RGB888_TO_RGB565(p2);
-+					dst[x+3] = RGB888_TO_RGB565(p3);
++					// Prefetch ahead in source buffer
++					if (usePrefetch && x + 16 < aspectOutW) {
++						__builtin_prefetch(&srcBuf[yLookup[x+16] * DOOMGENERIC_RESX + srcX], 0, 0);
++					}
++					dst[x]   = palette[srcBuf[yLookup[x]   * DOOMGENERIC_RESX + srcX]];
++					dst[x+1] = palette[srcBuf[yLookup[x+1] * DOOMGENERIC_RESX + srcX]];
++					dst[x+2] = palette[srcBuf[yLookup[x+2] * DOOMGENERIC_RESX + srcX]];
++					dst[x+3] = palette[srcBuf[yLookup[x+3] * DOOMGENERIC_RESX + srcX]];
 +				}
 +				// Handle remaining pixels
 +				for (; x < aspectOutW; x++) {
-+					uint32_t pixel = srcRow[srcYLookupAspect[x] * DOOMGENERIC_RESX];
-+					dst[x] = RGB888_TO_RGB565(pixel);
++					dst[x] = palette[srcBuf[yLookup[x] * DOOMGENERIC_RESX + srcX]];
 +				}
 +			}
 +		} else {
 +			// Full-screen stretched rendering (gameplay with FOV correction)
++			// Direct palette lookup from I_VideoBuffer
 +			for (unsigned int y = 0; y < scaledOutH; y++) {
 +				uint16_t *dst = renderBuffer + (y + scaledOffY) * fbWidth;
-+				uint32_t *srcRow = srcBuf + srcXLookup[y];
++				unsigned int srcX = srcXLookup[y];
++				const unsigned int *yLookup = srcYLookup;
 +				
-+				// Process 4 pixels at a time when possible
++				// Prefetch next row's lookup value
++				if (usePrefetch && y + 1 < scaledOutH) {
++					__builtin_prefetch(&srcXLookup[y + 1], 0, 3);
++				}
++				
++				// Process 4 pixels at a time with direct palette lookup
 +				unsigned int x = 0;
 +				for (; x + 3 < scaledOutW; x += 4) {
-+					uint32_t p0 = srcRow[srcYLookup[x] * DOOMGENERIC_RESX];
-+					uint32_t p1 = srcRow[srcYLookup[x+1] * DOOMGENERIC_RESX];
-+					uint32_t p2 = srcRow[srcYLookup[x+2] * DOOMGENERIC_RESX];
-+					uint32_t p3 = srcRow[srcYLookup[x+3] * DOOMGENERIC_RESX];
-+					dst[x]   = RGB888_TO_RGB565(p0);
-+					dst[x+1] = RGB888_TO_RGB565(p1);
-+					dst[x+2] = RGB888_TO_RGB565(p2);
-+					dst[x+3] = RGB888_TO_RGB565(p3);
++					// Prefetch ahead in source buffer
++					if (usePrefetch && x + 16 < scaledOutW) {
++						__builtin_prefetch(&srcBuf[yLookup[x+16] * DOOMGENERIC_RESX + srcX], 0, 0);
++					}
++					dst[x]   = palette[srcBuf[yLookup[x]   * DOOMGENERIC_RESX + srcX]];
++					dst[x+1] = palette[srcBuf[yLookup[x+1] * DOOMGENERIC_RESX + srcX]];
++					dst[x+2] = palette[srcBuf[yLookup[x+2] * DOOMGENERIC_RESX + srcX]];
++					dst[x+3] = palette[srcBuf[yLookup[x+3] * DOOMGENERIC_RESX + srcX]];
 +				}
 +				// Handle remaining pixels
 +				for (; x < scaledOutW; x++) {
-+					uint32_t pixel = srcRow[srcYLookup[x] * DOOMGENERIC_RESX];
-+					dst[x] = RGB888_TO_RGB565(pixel);
++					dst[x] = palette[srcBuf[yLookup[x] * DOOMGENERIC_RESX + srcX]];
 +				}
 +			}
 +		}
 +		
-+		// Write frame to display
++		// Write frame to display (measure time)
++		uint32_t writeStart = DG_GetTicksMs();
 +		lseek(fbFd, 0, SEEK_SET);
 +		write(fbFd, renderBuffer, renderBufferSize);
++		if (useVsync) {
++			fsync(fbFd);  // Wait for SPI transfer (~95ms, ~10 FPS but no tearing)
++		}
++		totalWriteTimeMs += DG_GetTicksMs() - writeStart;
 +	} else {
 +		// Original 32-bit mmap path
 +		for (int line = 0; line < DOOMGENERIC_RESY; line++) {
@@ -512,14 +1266,358 @@ index ed94dd9..f3e25d9 100644
 +				(fbBytesPerPixel * DOOMGENERIC_RESX)
 +			);
 +		}
++	}
++
++	// FPS tracking - only when -fpsdebug is enabled
++	// Writes to file (stderr causes SIGIL to crash!)
++	if (useFpsDebug) {
++		frameCount++;
++		uint32_t now = DG_GetTicksMs();
++		if (now - lastFpsTime >= FPS_UPDATE_INTERVAL_MS) {
++			currentFps = (frameCount * 1000) / (now - lastFpsTime);
++			avgWriteTimeMs = frameCount > 0 ? totalWriteTimeMs / frameCount : 0;
++			uint32_t displayFps = avgWriteTimeMs > 0 ? 1000 / avgWriteTimeMs : 0;
++			// Write to file instead of stderr - stderr causes crashes on intensive maps
++			if (fpsFd < 0) {
++				fpsFd = open("/tmp/fps.log", O_WRONLY | O_CREAT | O_TRUNC, 0644);
++			}
++			if (fpsFd >= 0) {
++				char buf[64];
++				int len = snprintf(buf, sizeof(buf), "FPS: %u | write: %ums | display: ~%u fps\n", 
++					currentFps, avgWriteTimeMs, displayFps);
++				write(fpsFd, buf, len);
++			}
++			frameCount = 0;
++			totalWriteTimeMs = 0;
++			lastFpsTime = now;
++		}
  	}
  
  	checkKeys();
+@@ -523,6 +1051,5 @@ int main(int argc, char **argv) {
+ 		doomgeneric_Tick();
+ 	}
+ 
+-
+ 	return 0;
+ }
+diff --git a/doomgeneric/dummy.c b/doomgeneric/dummy.c
+index d78816b..0efdd9b 100644
+--- a/doomgeneric/dummy.c
++++ b/doomgeneric/dummy.c
+@@ -11,6 +11,7 @@
+  *---------------------------------------------------------------------*/
+ 
+ #include "doomtype.h"
++#include "doomfeatures.h"
+ 
+ /*---------------------------------------------------------------------*
+  *  local definitions                                                  *
+@@ -24,9 +25,11 @@
+  *  public data                                                        *
+  *---------------------------------------------------------------------*/
+ 
++// net_client_connected and drone now defined in net_client.c when FEATURE_MULTIPLAYER is enabled
++#ifndef FEATURE_MULTIPLAYER
+ boolean net_client_connected = false;
+-
+ boolean drone = false;
++#endif
+ 
+ /*---------------------------------------------------------------------*
+  *  private data                                                       *
+diff --git a/doomgeneric/g_game.c b/doomgeneric/g_game.c
+index 9954d78..20eca54 100644
+--- a/doomgeneric/g_game.c
++++ b/doomgeneric/g_game.c
+@@ -948,8 +948,8 @@ void G_Ticker (void)
+ 		if (gametic > BACKUPTICS 
+ 		    && consistancy[i][buf] != cmd->consistancy) 
+ 		{ 
+-		    I_Error ("consistency failure (%i should be %i)",
+-			     cmd->consistancy, consistancy[i][buf]); 
++		    I_Error ("consistency failure for player %i (%i should be %i)",
++			     i, cmd->consistancy, consistancy[i][buf]); 
+ 		} 
+ 		if (players[i].mo) 
+ 		    consistancy[i][buf] = players[i].mo->x; 
+diff --git a/doomgeneric/i_system.c b/doomgeneric/i_system.c
+index 53ab2c9..2a8c1da 100644
+--- a/doomgeneric/i_system.c
++++ b/doomgeneric/i_system.c
+@@ -47,6 +47,7 @@
+ #include "i_video.h"
+ 
+ #include "i_system.h"
++#include "net_lobby.h"
+ 
+ #include "w_wad.h"
+ #include "z_zone.h"
+@@ -247,6 +248,9 @@ void I_Quit (void)
+ {
+     atexit_listentry_t *entry;
+ 
++    // Show "Exiting..." screen for better UX (Pager takes time to restart)
++    DG_DrawExiting();
++
+     // Run through all exit functions
+  
+     entry = exit_funcs; 
+@@ -259,9 +263,9 @@ void I_Quit (void)
+ 
+ #if ORIGCODE
+     SDL_Quit();
++#endif
+ 
+     exit(0);
+-#endif
+ }
+ 
+ #if !defined(_WIN32) && !defined(__MACOSX__) && !defined(__DJGPP__)
+diff --git a/doomgeneric/i_video.c b/doomgeneric/i_video.c
+index 84bebde..3cee47f 100644
+--- a/doomgeneric/i_video.c
++++ b/doomgeneric/i_video.c
+@@ -128,9 +128,10 @@ typedef struct
+ 	byte b;
+ } col_t;
+ 
+-// Palette converted to RGB565
++// Palette converted to RGB565 - exported for use by doomgeneric_linuxvt.c
++// This is precomputed when palette changes to avoid per-pixel conversion
+ 
+-static uint16_t rgb565_palette[256];
++uint16_t rgb565_palette[256];
+ 
+ void cmap_to_rgb565(uint16_t * out, uint8_t * in, int in_pixels)
+ {
+@@ -320,53 +321,13 @@ void I_UpdateNoBlit (void)
+ 
+ void I_FinishUpdate (void)
+ {
+-    int y;
+-    int x_offset, y_offset, x_offset_end;
+-    unsigned char *line_in, *line_out;
+-
+-    /* Offsets in case FB is bigger than DOOM */
+-    /* 600 = s_Fb heigt, 200 screenheight */
+-    /* 600 = s_Fb heigt, 200 screenheight */
+-    /* 2048 =s_Fb width, 320 screenwidth */
+-    y_offset     = (((s_Fb.yres - (SCREENHEIGHT * fb_scaling)) * s_Fb.bits_per_pixel/8)) / 2;
+-    x_offset     = (((s_Fb.xres - (SCREENWIDTH  * fb_scaling)) * s_Fb.bits_per_pixel/8)) / 2; // XXX: siglent FB hack: /4 instead of /2, since it seems to handle the resolution in a funny way
+-    //x_offset     = 0;
+-    x_offset_end = ((s_Fb.xres - (SCREENWIDTH  * fb_scaling)) * s_Fb.bits_per_pixel/8) - x_offset;
+-
+-    /* DRAW SCREEN */
+-    line_in  = (unsigned char *) I_VideoBuffer;
+-    line_out = (unsigned char *) DG_ScreenBuffer;
+-
+-    y = SCREENHEIGHT;
+-
+-    while (y--)
+-    {
+-        int i;
+-        for (i = 0; i < fb_scaling; i++) {
+-            line_out += x_offset;
+-#ifdef CMAP256
+-            if (fb_scaling == 1) {
+-                memcpy(line_out, line_in, SCREENWIDTH); /* fb_width is bigger than Doom SCREENWIDTH... */
+-            } else {
+-                int j;
+-
+-                for (j = 0; j < SCREENWIDTH; j++) {
+-                    int k;
+-                    for (k = 0; k < fb_scaling; k++) {
+-                        line_out[j * fb_scaling + k] = line_in[j];
+-                    }
+-                }
+-            }
+-#else
+-            //cmap_to_rgb565((void*)line_out, (void*)line_in, SCREENWIDTH);
+-            cmap_to_fb((void*)line_out, (void*)line_in, SCREENWIDTH);
+-#endif
+-            line_out += (SCREENWIDTH * fb_scaling * (s_Fb.bits_per_pixel/8)) + x_offset_end;
+-        }
+-        line_in += SCREENWIDTH;
+-    }
+-
+-	DG_DrawFrame();
++    // OPTIMIZATION: DG_DrawFrame now reads directly from I_VideoBuffer and uses
++    // the precomputed rgb565_palette. Skip the redundant cmap_to_fb conversion
++    // which was writing to DG_ScreenBuffer (unused in 16-bit path).
++    // This eliminates ~64K of unnecessary per-pixel color conversions per frame!
++    
++    // Just call DG_DrawFrame directly - it handles everything
++    DG_DrawFrame();
+ }
+ 
+ //
+@@ -388,28 +349,23 @@ void I_ReadScreen (byte* scr)
+ void I_SetPalette (byte* palette)
+ {
+ 	int i;
+-	//col_t* c;
+-
+-	//for (i = 0; i < 256; i++)
+-	//{
+-	//	c = (col_t*)palette;
+-
+-	//	rgb565_palette[i] = GFX_RGB565(gammatable[usegamma][c->r],
+-	//								   gammatable[usegamma][c->g],
+-	//								   gammatable[usegamma][c->b]);
+-
+-	//	palette += 3;
+-	//}
+-    
+ 
+-    /* performance boost:
+-     * map to the right pixel format over here! */
++    /* Performance optimization:
++     * Precompute both RGBA and RGB565 palettes when palette changes.
++     * This eliminates per-pixel color conversion in the render loop. */
+ 
+     for (i=0; i<256; ++i ) {
++        byte r = gammatable[usegamma][*palette++];
++        byte g = gammatable[usegamma][*palette++];
++        byte b = gammatable[usegamma][*palette++];
++        
+         colors[i].a = 0;
+-        colors[i].r = gammatable[usegamma][*palette++];
+-        colors[i].g = gammatable[usegamma][*palette++];
+-        colors[i].b = gammatable[usegamma][*palette++];
++        colors[i].r = r;
++        colors[i].g = g;
++        colors[i].b = b;
++        
++        // Precompute RGB565 for 16-bit framebuffers (avoids 5 bitwise ops per pixel)
++        rgb565_palette[i] = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+     }
+ 
+ #ifdef CMAP256
+diff --git a/doomgeneric/m_fixed.c b/doomgeneric/m_fixed.c
+index 23f6ff3..faea90c 100644
+--- a/doomgeneric/m_fixed.c
++++ b/doomgeneric/m_fixed.c
+@@ -16,8 +16,6 @@
+ //	Fixed point implementation.
+ //
+ 
+-
+-
+ #include "stdlib.h"
+ 
+ #include "doomtype.h"
+@@ -25,10 +23,12 @@
+ 
+ #include "m_fixed.h"
+ 
+-
+-
+-
+-// Fixme. __USE_C_FIXED__ or something.
++//
++// When INLINE_FIXED_MATH is defined, these functions are provided as
++// static inline in m_fixed.h instead. This file is still compiled but
++// the functions are excluded to avoid duplicate symbols.
++//
++#ifndef INLINE_FIXED_MATH
+ 
+ fixed_t
+ FixedMul
+@@ -38,8 +38,6 @@ FixedMul
+     return ((int64_t) a * (int64_t) b) >> FRACBITS;
+ }
+ 
+-
+-
+ //
+ // FixedDiv, C version.
+ //
+@@ -60,3 +58,5 @@ fixed_t FixedDiv(fixed_t a, fixed_t b)
+     }
+ }
+ 
++#endif // !INLINE_FIXED_MATH
++
+diff --git a/doomgeneric/m_fixed.h b/doomgeneric/m_fixed.h
+index 733b290..2115fdf 100644
+--- a/doomgeneric/m_fixed.h
++++ b/doomgeneric/m_fixed.h
+@@ -20,8 +20,9 @@
+ #ifndef __M_FIXED__
+ #define __M_FIXED__
+ 
+-
+-
++#include <stdint.h>
++#include <stdlib.h>
++#include <limits.h>
+ 
+ //
+ // Fixed point, 32bit as 16.16.
+@@ -31,9 +32,40 @@
+ 
+ typedef int fixed_t;
+ 
+-fixed_t FixedMul	(fixed_t a, fixed_t b);
+-fixed_t FixedDiv	(fixed_t a, fixed_t b);
++//
++// PAGER OPTIMIZATION: Inline fixed-point math
++//
++// When INLINE_FIXED_MATH is defined, FixedMul and FixedDiv are inlined.
++// This eliminates function call overhead on 165+ call sites in hot paths
++// (rendering, collision, AI).
++//
++// Source: FastDoom, GZDoom optimization techniques
++// Expected gain: 5-10% in hot code paths
++//
++// Compile with: -DINLINE_FIXED_MATH
++//
++#ifdef INLINE_FIXED_MATH
++
++static inline fixed_t FixedMul(fixed_t a, fixed_t b)
++{
++    return (fixed_t)(((int64_t)a * (int64_t)b) >> FRACBITS);
++}
++
++static inline fixed_t FixedDiv(fixed_t a, fixed_t b)
++{
++    if ((abs(a) >> 14) >= abs(b))
++    {
++        return (a ^ b) < 0 ? INT_MIN : INT_MAX;
++    }
++    return (fixed_t)(((int64_t)a << FRACBITS) / b);
++}
++
++#else
+ 
++// Standard function declarations (implementations in m_fixed.c)
++fixed_t FixedMul(fixed_t a, fixed_t b);
++fixed_t FixedDiv(fixed_t a, fixed_t b);
+ 
++#endif // INLINE_FIXED_MATH
+ 
+-#endif
++#endif // __M_FIXED__
 diff --git a/doomgeneric/m_menu.c b/doomgeneric/m_menu.c
-index 6df9655..4feb72c 100644
+index 6df9655..1c44f04 100644
 --- a/doomgeneric/m_menu.c
 +++ b/doomgeneric/m_menu.c
-@@ -1167,10 +1167,8 @@ static char *M_SelectEndMessage(void)
+@@ -74,7 +74,12 @@ int			showMessages = 1;
+ 	
+ 
+ // Blocky mode, has default, 0 = high, 1 = normal
+-int			detailLevel = 0;
++// POTATO_MODE forces low detail (chunky pixels) for better performance
++#ifdef POTATO_MODE
++int			detailLevel = 1;  // Low detail - pixel doubling
++#else
++int			detailLevel = 0;  // High detail - normal
++#endif
+ int			screenblocks = 10;
+ 
+ // temp for screenblocks (0-9)
+@@ -1167,10 +1172,8 @@ static char *M_SelectEndMessage(void)
  
  void M_QuitDOOM(int choice)
  {
@@ -532,6 +1630,4067 @@ index 6df9655..4feb72c 100644
  }
  
  
+diff --git a/doomgeneric/net_client.c b/doomgeneric/net_client.c
+new file mode 100644
+index 0000000..85411b9
+--- /dev/null
++++ b/doomgeneric/net_client.c
+@@ -0,0 +1,1058 @@
++//
++// Copyright(C) 2005-2014 Simon Howard
++// Copyright(C) 2026 WiFi Pineapple Pager port
++//
++// Network client code
++//
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "config.h"
++#include "doomtype.h"
++#include "d_loop.h"
++#include "d_ticcmd.h"
++#include "i_system.h"
++#include "i_timer.h"
++#include "m_argv.h"
++#include "m_misc.h"
++#include "net_client.h"
++#include "net_defs.h"
++#include "net_io.h"
++#include "net_packet.h"
++#include "net_socket.h"
++#include "w_wad.h"
++
++// Connection state
++typedef enum
++{
++    CLIENT_STATE_DISCONNECTED,
++    CLIENT_STATE_CONNECTING,
++    CLIENT_STATE_CONNECTED,
++    CLIENT_STATE_WAITING_START,
++    CLIENT_STATE_IN_GAME,
++} client_state_t;
++
++static client_state_t client_state = CLIENT_STATE_DISCONNECTED;
++static net_addr_t *server_addr = NULL;
++static net_context_t *client_context = NULL;
++
++// Global variables exported to other modules
++boolean net_client_connected = false;
++boolean net_client_received_wait_data = false;
++net_waitdata_t net_client_wait_data;
++boolean net_waiting_for_launch = false;
++char *net_player_name = "Pager";
++
++sha1_digest_t net_server_wad_sha1sum;
++sha1_digest_t net_server_deh_sha1sum;
++unsigned int net_server_is_freedoom = 0;
++sha1_digest_t net_local_wad_sha1sum;
++sha1_digest_t net_local_deh_sha1sum;
++unsigned int net_local_is_freedoom = 0;
++
++boolean drone = false;
++
++// Game settings received from server
++// Received game settings from server (non-static for d_loop.c access)
++net_gamesettings_t received_settings;
++boolean received_settings_valid = false;
++
++// Send queue - stores ticcmd diffs for retransmission
++typedef struct
++{
++    boolean active;
++    unsigned int seq;
++    unsigned int time;  // Time command was generated
++    unsigned int diff;  // Diff bitfield
++    ticcmd_t cmd;       // The full ticcmd
++} net_send_queue_t;
++
++#define BACKUPTICS 128
++static net_send_queue_t send_queue[BACKUPTICS];
++static ticcmd_t last_ticcmd;  // For calculating diffs
++
++// Receive window - baseline ticcmds for patching diffs (per-player)
++static ticcmd_t recvwindow_cmd_base[NET_MAXPLAYERS];
++
++// Last time we sent a packet
++static unsigned int last_send_time = 0;
++static unsigned int last_gamedata_time = 0;
++static unsigned int last_packet_send_time = 0;  // For keepalive
++
++// Connection sequence number
++static unsigned int connect_seq = 0;
++
++// Local player number
++static int local_player = 0;
++
++// Receive window - tracks which tic we're expecting
++static unsigned int recvwindow_start = 0;
++
++// Track the next expected reliable sequence number
++static unsigned int reliable_recv_seq = 0;
++
++// Expand a low byte tic number to a full tic number relative to recvwindow_start
++static unsigned int NET_CL_ExpandTicNum(unsigned int b)
++{
++    unsigned int l, h;
++    unsigned int result;
++
++    h = recvwindow_start & ~0xff;
++    l = recvwindow_start & 0xff;
++
++    result = h | b;
++
++    if (l < 0x40 && b > 0xb0)
++        result -= 0x100;
++    if (l > 0xb0 && b < 0x40)
++        result += 0x100;
++    
++    return result;
++}
++
++static void NET_CL_SendSyn(net_connect_data_t *data);
++static void NET_CL_ParsePacket(net_packet_t *packet);
++static void NET_CL_SendReliableACK(unsigned int seq);
++static void NET_CL_SendGameDataACK(void);
++static void NET_CL_SendTics(int starttic, int endtic);
++
++// Track last reliable sequence we ACKed to avoid duplicate ACKs
++static unsigned int last_acked_seq = 0xFF;
++
++void NET_CL_Init(void)
++{
++    client_context = NET_NewContext();
++    NET_AddModule(client_context, &net_socket_module);
++}
++
++boolean NET_CL_Connect(net_addr_t *addr, net_connect_data_t *data)
++{
++    int start_time;
++    int attempts;
++
++    if (client_state != CLIENT_STATE_DISCONNECTED)
++    {
++        fprintf(stderr, "NET_CL_Connect: Already connected\n");
++        return false;
++    }
++
++    // Initialize socket module
++    if (!net_socket_module.InitClient())
++    {
++        fprintf(stderr, "NET_CL_Connect: Failed to init socket\n");
++        return false;
++    }
++
++    server_addr = addr;
++    client_state = CLIENT_STATE_CONNECTING;
++    connect_seq = 0;
++    last_packet_send_time = I_GetTimeMS();  // Initialize keepalive timer
++
++    printf("NET_CL_Connect: Connecting to %s...\n", NET_AddrToString(addr));
++
++    // Try to connect with timeout
++    start_time = I_GetTimeMS();
++    attempts = 0;
++
++    while (client_state == CLIENT_STATE_CONNECTING)
++    {
++        // Send SYN packet
++        if (I_GetTimeMS() - last_send_time > 500)
++        {
++            NET_CL_SendSyn(data);
++            last_send_time = I_GetTimeMS();
++            attempts++;
++            printf("NET_CL_Connect: Attempt %d...\n", attempts);
++        }
++
++        // Check for response
++        NET_CL_Run();
++
++        // Timeout after 10 seconds
++        if (I_GetTimeMS() - start_time > 10000)
++        {
++            fprintf(stderr, "NET_CL_Connect: Connection timed out\n");
++            client_state = CLIENT_STATE_DISCONNECTED;
++            return false;
++        }
++
++        I_Sleep(10);
++    }
++
++    if (client_state == CLIENT_STATE_CONNECTED ||
++        client_state == CLIENT_STATE_WAITING_START)
++    {
++        printf("NET_CL_Connect: Connected!\n");
++        net_client_connected = true;
++        return true;
++    }
++
++    return false;
++}
++
++static void NET_CL_SendSyn(net_connect_data_t *data)
++{
++    net_packet_t *packet;
++
++    packet = NET_NewPacket(256);
++    if (packet == NULL)
++        return;
++
++    // Packet type
++    NET_WriteInt16(packet, NET_PACKET_TYPE_SYN);
++    
++    // Magic number
++    NET_WriteInt32(packet, NET_MAGIC_NUMBER);
++    
++    // Version string (must match format server expects)
++    NET_WriteString(packet, "Chocolate Doom 3.1.1");
++    
++    // Protocol list: count followed by protocol name strings
++    NET_WriteInt8(packet, 1);  // We support 1 protocol
++    NET_WriteString(packet, "CHOCOLATE_DOOM_0");
++    
++    // Connect data
++    NET_WriteInt8(packet, data->gamemode);
++    NET_WriteInt8(packet, data->gamemission);
++    NET_WriteInt8(packet, data->lowres_turn);
++    NET_WriteInt8(packet, data->drone);
++    NET_WriteInt8(packet, data->max_players);
++    NET_WriteInt8(packet, data->is_freedoom);
++
++    // WAD SHA1
++    for (int i = 0; i < 20; i++)
++        NET_WriteInt8(packet, data->wad_sha1sum[i]);
++
++    // DEH SHA1
++    for (int i = 0; i < 20; i++)
++        NET_WriteInt8(packet, data->deh_sha1sum[i]);
++
++    NET_WriteInt8(packet, data->player_class);
++    
++    // Player name
++    NET_WriteString(packet, net_player_name);
++
++    NET_SendPacket(server_addr, packet);
++    NET_FreePacket(packet);
++}
++
++static void NET_CL_SendReliableACK(unsigned int seq)
++{
++    net_packet_t *packet;
++    
++    // Check if this is the sequence we expected
++    if (seq == (reliable_recv_seq & 0xff))
++    {
++        // Accept this packet and increment our expected sequence
++        reliable_recv_seq = (reliable_recv_seq + 1) & 0xff;
++    }
++    // If not the expected sequence, still ACK but don't increment
++    // (this handles retries and out-of-order packets)
++    
++    packet = NET_NewPacket(16);
++    if (packet == NULL)
++        return;
++    
++    // ACK contains the NEXT expected sequence number
++    NET_WriteInt16(packet, NET_PACKET_TYPE_RELIABLE_ACK);
++    NET_WriteInt8(packet, reliable_recv_seq & 0xFF);
++    
++    NET_SendPacket(server_addr, packet);
++    NET_FreePacket(packet);
++}
++
++// Send acknowledgment for received game data
++static void NET_CL_SendGameDataACK(void)
++{
++    net_packet_t *packet;
++    
++    packet = NET_NewPacket(10);
++    if (packet == NULL)
++        return;
++    
++    NET_WriteInt16(packet, NET_PACKET_TYPE_GAMEDATA_ACK);
++    NET_WriteInt8(packet, recvwindow_start & 0xFF);
++    
++    NET_SendPacket(server_addr, packet);
++    NET_FreePacket(packet);
++}
++
++void NET_CL_Disconnect(void)
++{
++    net_packet_t *packet;
++
++    if (!net_client_connected)
++        return;
++
++    // Send disconnect packet
++    packet = NET_NewPacket(16);
++    if (packet != NULL)
++    {
++        NET_WriteInt16(packet, NET_PACKET_TYPE_DISCONNECT);
++        NET_SendPacket(server_addr, packet);
++        NET_FreePacket(packet);
++    }
++
++    NET_Socket_Shutdown();
++    client_state = CLIENT_STATE_DISCONNECTED;
++    net_client_connected = false;
++}
++
++void NET_CL_Run(void)
++{
++    net_addr_t *addr;
++    net_packet_t *packet;
++    unsigned int nowtime;
++
++    if (client_context == NULL)
++        return;
++
++    // Receive and process packets
++    while (NET_RecvPacket(client_context, &addr, &packet))
++    {
++        NET_CL_ParsePacket(packet);
++        NET_FreePacket(packet);
++        NET_FreeAddress(addr);
++    }
++    
++    // Send keepalive if we haven't sent anything recently (every 1 second)
++    // Server disconnects clients after 30 seconds of silence!
++    nowtime = I_GetTimeMS();
++    if (net_client_connected && (nowtime - last_packet_send_time > 1000))
++    {
++        packet = NET_NewPacket(16);
++        if (packet != NULL)
++        {
++            NET_WriteInt16(packet, NET_PACKET_TYPE_KEEPALIVE);
++            NET_SendPacket(server_addr, packet);
++            NET_FreePacket(packet);
++            last_packet_send_time = nowtime;
++        }
++    }
++}
++
++static void NET_CL_ParsePacket(net_packet_t *packet)
++{
++    unsigned int packet_type;
++    unsigned int is_reliable;
++    unsigned int reliable_seq = 0;
++
++    if (!NET_ReadInt16(packet, &packet_type))
++        return;
++
++    // Check for reliable packet flag (bit 15)
++    is_reliable = packet_type & NET_RELIABLE_PACKET;
++    packet_type = packet_type & ~NET_RELIABLE_PACKET;
++    
++    // Read reliable sequence number and send ACK
++    if (is_reliable)
++    {
++        if (!NET_ReadInt8(packet, &reliable_seq))
++            return;
++        NET_CL_SendReliableACK(reliable_seq);
++    }
++    
++    // Debug output - only for non-GAMEDATA packets to reduce spam
++    if (packet_type != NET_PACKET_TYPE_GAMEDATA && packet_type != NET_PACKET_TYPE_GAMEDATA_RESEND)
++    {
++        fprintf(stderr, "NET_CL_ParsePacket: type=%d reliable=%d seq=%d\n", 
++                packet_type, is_reliable ? 1 : 0, reliable_seq);
++    }
++
++    switch (packet_type)
++    {
++        case NET_PACKET_TYPE_SYN:
++        {
++            // Server's SYN response - connection accepted!
++            // Read server version string
++            char *server_version = NET_ReadString(packet);
++            if (server_version != NULL)
++            {
++                fprintf(stderr, "NET_CL_ParsePacket: Server version: %s\n", server_version);
++            }
++            
++            // Read server's protocol
++            char *protocol = NET_ReadString(packet);
++            if (protocol != NULL)
++            {
++                fprintf(stderr, "NET_CL_ParsePacket: Protocol: %s\n", protocol);
++            }
++            
++            // Connection successful!
++            printf("NET_CL_ParsePacket: Connected to server!\n");
++            client_state = CLIENT_STATE_WAITING_START;
++            break;
++        }
++        
++        case NET_PACKET_TYPE_ACK:
++        {
++            // Legacy: Connection accepted (deprecated but handle anyway)
++            unsigned int player;
++            if (NET_ReadInt8(packet, &player))
++            {
++                local_player = player;
++                printf("NET_CL_ParsePacket: Accepted as player %d\n", local_player);
++                client_state = CLIENT_STATE_WAITING_START;
++            }
++            break;
++        }
++
++        case NET_PACKET_TYPE_REJECTED:
++        {
++            char *reason = NET_ReadString(packet);
++            if (reason != NULL)
++                fprintf(stderr, "Connection rejected: %s\n", reason);
++            client_state = CLIENT_STATE_DISCONNECTED;
++            break;
++        }
++
++        case NET_PACKET_TYPE_WAITING_DATA:
++        {
++            // Server is waiting for more players - read full wait data
++            char *s;
++            int i;
++            
++            NET_ReadInt8(packet, (unsigned int *)&net_client_wait_data.num_players);
++            NET_ReadInt8(packet, (unsigned int *)&net_client_wait_data.num_drones);
++            NET_ReadInt8(packet, (unsigned int *)&net_client_wait_data.ready_players);
++            NET_ReadInt8(packet, (unsigned int *)&net_client_wait_data.max_players);
++            NET_ReadInt8(packet, (unsigned int *)&net_client_wait_data.is_controller);
++            NET_ReadInt8(packet, (unsigned int *)&net_client_wait_data.consoleplayer);
++            
++            // Read player names and addresses
++            for (i = 0; i < net_client_wait_data.num_players && i < NET_MAXPLAYERS; i++) {
++                s = NET_ReadString(packet);
++                if (s != NULL) {
++                    strncpy(net_client_wait_data.player_names[i], s, MAXPLAYERNAME - 1);
++                    net_client_wait_data.player_names[i][MAXPLAYERNAME - 1] = '\0';
++                }
++                
++                s = NET_ReadString(packet);
++                if (s != NULL) {
++                    strncpy(net_client_wait_data.player_addrs[i], s, MAXPLAYERNAME - 1);
++                    net_client_wait_data.player_addrs[i][MAXPLAYERNAME - 1] = '\0';
++                }
++            }
++            
++            // Skip SHA1 sums and freedoom flag (we don't validate them)
++            // wad_sha1sum (20 bytes), deh_sha1sum (20 bytes), is_freedoom (1 byte)
++            
++            net_client_received_wait_data = true;
++            break;
++        }
++
++        case NET_PACKET_TYPE_GAMESTART:
++        {
++            unsigned int random_val;
++            extern int prndindex;  // From m_random.c - P_Random seed
++            extern int rndindex;   // From m_random.c - M_Random seed (used in consistency)
++            
++            fprintf(stderr, "NET_CL_ParsePacket: Received GAMESTART!\n");
++            // Game is starting - read settings in CORRECT ORDER per chocolate-doom
++            // Order: ticdup, extratics, deathmatch, nomonsters, fast_monsters, respawn_monsters,
++            //        episode, map, skill, gameversion, lowres_turn, new_sync, timelimit(32!),
++            //        loadgame, random, num_players, consoleplayer, player_classes[]
++            NET_ReadInt8(packet, (unsigned int *)&received_settings.ticdup);
++            NET_ReadInt8(packet, (unsigned int *)&received_settings.extratics);
++            NET_ReadInt8(packet, (unsigned int *)&received_settings.deathmatch);
++            NET_ReadInt8(packet, (unsigned int *)&received_settings.nomonsters);
++            NET_ReadInt8(packet, (unsigned int *)&received_settings.fast_monsters);
++            NET_ReadInt8(packet, (unsigned int *)&received_settings.respawn_monsters);
++            NET_ReadInt8(packet, (unsigned int *)&received_settings.episode);
++            NET_ReadInt8(packet, (unsigned int *)&received_settings.map);
++            NET_ReadSInt8(packet, &received_settings.skill);
++            NET_ReadInt8(packet, (unsigned int *)&received_settings.gameversion);
++            NET_ReadInt8(packet, (unsigned int *)&received_settings.lowres_turn);
++            NET_ReadInt8(packet, (unsigned int *)&received_settings.new_sync);
++            NET_ReadInt32(packet, (unsigned int *)&received_settings.timelimit);  // INT32!
++            NET_ReadSInt8(packet, &received_settings.loadgame);
++            NET_ReadInt8(packet, &random_val);  // random field - CRITICAL for sync!
++            NET_ReadInt8(packet, (unsigned int *)&received_settings.num_players);
++            NET_ReadSInt8(packet, &received_settings.consoleplayer);
++            
++            // Set the random seed to match server - CRITICAL for game sync!
++            prndindex = random_val;
++            rndindex = random_val;
++            fprintf(stderr, "NET_CL_ParsePacket: Random seed set to %d\n", random_val);
++
++            fprintf(stderr, "NET_CL_ParsePacket: GAMESTART parsed: ep=%d map=%d players=%d console=%d\n",
++                    received_settings.episode, received_settings.map,
++                    received_settings.num_players, received_settings.consoleplayer);
++
++            for (int i = 0; i < received_settings.num_players && i < NET_MAXPLAYERS; i++)
++                NET_ReadInt8(packet, (unsigned int *)&received_settings.player_classes[i]);
++
++            received_settings_valid = true;
++            client_state = CLIENT_STATE_IN_GAME;
++            net_waiting_for_launch = false;
++            
++            // Initialize send queue, last_ticcmd, and receive window baseline
++            memset(send_queue, 0, sizeof(send_queue));
++            memset(&last_ticcmd, 0, sizeof(last_ticcmd));
++            memset(recvwindow_cmd_base, 0, sizeof(recvwindow_cmd_base));
++            recvwindow_start = 0;
++            
++            printf("NET_CL_ParsePacket: Game starting! We are player %d (consoleplayer=%d) of %d\n",
++                   received_settings.consoleplayer + 1,
++                   received_settings.consoleplayer,
++                   received_settings.num_players);
++            fprintf(stderr, "DEBUG: consoleplayer=%d, num_players=%d\n",
++                    received_settings.consoleplayer, received_settings.num_players);
++            break;
++        }
++
++        case NET_PACKET_TYPE_GAMEDATA:
++        {
++            // Game data from server - CORRECT FORMAT:
++            // int8: start_tic (low byte)
++            // int8: num_tics
++            // For each tic:
++            //   int16: latency
++            //   int8: playeringame bitfield (bit 0 = player 0, etc)
++            //   For each player in bitfield: ticcmd diff
++            
++            unsigned int start_tic;
++            unsigned int num_tics;
++            unsigned int tic_idx;
++            
++            if (!NET_ReadInt8(packet, &start_tic))
++                break;
++            if (!NET_ReadInt8(packet, &num_tics))
++                break;
++            
++            // Expand start_tic from low byte to full value
++            // (server only sends low byte, we reconstruct full value)
++            start_tic = NET_CL_ExpandTicNum(start_tic);
++            
++            // Process each tic in the packet
++            for (tic_idx = 0; tic_idx < num_tics; tic_idx++)
++            {
++                unsigned int current_tic = start_tic + tic_idx;
++                signed int latency;
++                unsigned int bitfield;
++                ticcmd_t ticcmds[NET_MAXPLAYERS];
++                boolean playeringame[NET_MAXPLAYERS];
++                
++                // Start from baseline (previous state), not zero!
++                memcpy(ticcmds, recvwindow_cmd_base, sizeof(ticcmds));
++                memset(playeringame, 0, sizeof(playeringame));
++                
++                // Read latency
++                if (!NET_ReadSInt16(packet, &latency))
++                    break;
++                
++                // Read playeringame BITFIELD (single byte, not 8 separate bytes!)
++                if (!NET_ReadInt8(packet, &bitfield))
++                    break;
++                
++                // Convert bitfield to array
++                for (int i = 0; i < NET_MAXPLAYERS; i++)
++                    playeringame[i] = (bitfield & (1 << i)) != 0;
++                
++                // Read ticcmd for each active player
++                for (int i = 0; i < NET_MAXPLAYERS; i++)
++                {
++                    if (playeringame[i])
++                    {
++                        unsigned int diff;
++                        signed int sval;
++                        unsigned int uval;
++                        
++                        if (!NET_ReadInt8(packet, &diff))
++                            break;
++                        
++                        // Skip our own player - we use our local ticcmd, not the relayed one
++                        // But we still need to read the diff data to advance the packet position
++                        if (i == received_settings.consoleplayer && !drone)
++                        {
++                            // Just skip the diff data - don't apply it
++                            if (diff & NET_TICDIFF_FORWARD)
++                                NET_ReadSInt8(packet, &sval);
++                            if (diff & NET_TICDIFF_SIDE)
++                                NET_ReadSInt8(packet, &sval);
++                            if (diff & NET_TICDIFF_TURN)
++                            {
++                                if (received_settings.lowres_turn)
++                                    NET_ReadSInt8(packet, &sval);
++                                else
++                                    NET_ReadSInt16(packet, &sval);
++                            }
++                            if (diff & NET_TICDIFF_BUTTONS)
++                                NET_ReadInt8(packet, &uval);
++                            if (diff & NET_TICDIFF_CONSISTANCY)
++                                NET_ReadInt8(packet, &uval);
++                            if (diff & NET_TICDIFF_CHATCHAR)
++                                NET_ReadInt8(packet, &uval);
++                            if (diff & NET_TICDIFF_RAVEN)
++                            {
++                                NET_ReadInt8(packet, &uval);
++                                NET_ReadInt8(packet, &uval);
++                            }
++                            if (diff & NET_TICDIFF_STRIFE)
++                            {
++                                NET_ReadInt8(packet, &uval);
++                                NET_ReadInt16(packet, &uval);
++                            }
++                            continue;  // Don't update baseline for our own player
++                        }
++                        
++                        // Now process other players' ticcmds normally
++                        if (diff & NET_TICDIFF_FORWARD)
++                        {
++                            NET_ReadSInt8(packet, &sval);
++                            ticcmds[i].forwardmove = sval;
++                        }
++                        if (diff & NET_TICDIFF_SIDE)
++                        {
++                            NET_ReadSInt8(packet, &sval);
++                            ticcmds[i].sidemove = sval;
++                        }
++                        if (diff & NET_TICDIFF_TURN)
++                        {
++                            // Check for lowres_turn mode
++                            if (received_settings.lowres_turn)
++                            {
++                                NET_ReadSInt8(packet, &sval);
++                                ticcmds[i].angleturn = sval * 256;
++                            }
++                            else
++                            {
++                                NET_ReadSInt16(packet, &sval);
++                                ticcmds[i].angleturn = sval;
++                            }
++                        }
++                        if (diff & NET_TICDIFF_BUTTONS)
++                        {
++                            NET_ReadInt8(packet, &uval);
++                            ticcmds[i].buttons = uval;
++                        }
++                        if (diff & NET_TICDIFF_CONSISTANCY)
++                        {
++                            NET_ReadInt8(packet, &uval);
++                            ticcmds[i].consistancy = uval;
++                        }
++                        // else: Consistency not in diff - using baseline value
++                        // Handle optional chatchar - MUST zero if not in diff (per Chocolate Doom)
++                        if (diff & NET_TICDIFF_CHATCHAR)
++                        {
++                            NET_ReadInt8(packet, &uval);
++                            ticcmds[i].chatchar = uval;
++                        }
++                        else
++                        {
++                            ticcmds[i].chatchar = 0;
++                        }
++                        
++                        // Raven (Heretic/Hexen) - not used in Doom but parse anyway
++                        if (diff & NET_TICDIFF_RAVEN)
++                        {
++                            NET_ReadInt8(packet, &uval);  // lookfly
++                            NET_ReadInt8(packet, &uval);  // arti
++                        }
++                        
++                        // Strife - not used in Doom but parse anyway
++                        if (diff & NET_TICDIFF_STRIFE)
++                        {
++                            NET_ReadInt8(packet, &uval);   // buttons2
++                            NET_ReadInt16(packet, &uval);  // inventory
++                        }
++                        
++                        // Update baseline for this player for next diff
++                        recvwindow_cmd_base[i] = ticcmds[i];
++                    }
++                }
++                
++                // Only deliver if this is the tic we're expecting
++                // This ensures sequential processing even if packets arrive out of order
++                if (current_tic == recvwindow_start)
++                {
++                    // Deliver to game loop
++                    D_ReceiveTic(ticcmds, playeringame);
++                    
++                    // Advance receive window
++                    recvwindow_start++;
++                }
++                // else if current_tic > recvwindow_start: out of order - skip
++                // else if current_tic < recvwindow_start: duplicate - ignore
++            }
++            
++            last_gamedata_time = I_GetTimeMS();
++            
++            // Send ACK after processing all tics
++            NET_CL_SendGameDataACK();
++            break;
++        }
++
++        case NET_PACKET_TYPE_GAMEDATA_RESEND:
++        {
++            // Server is asking us to resend our GAMEDATA
++            // The packet contains: start tic (int32) + num_tics (int8)
++            unsigned int start_tic;
++            unsigned int num_tics;
++            unsigned int end_tic;
++            
++            if (!NET_ReadInt32(packet, &start_tic))
++                break;
++            if (!NET_ReadInt8(packet, &num_tics))
++                break;
++            
++            end_tic = start_tic + num_tics - 1;
++            
++            // Trim range to what we actually have in send queue
++            while (start_tic <= end_tic
++                && (!send_queue[start_tic % BACKUPTICS].active
++                 || send_queue[start_tic % BACKUPTICS].seq != start_tic))
++            {
++                start_tic++;
++            }
++            
++            while (start_tic <= end_tic
++                && (!send_queue[end_tic % BACKUPTICS].active
++                 || send_queue[end_tic % BACKUPTICS].seq != end_tic))
++            {
++                end_tic--;
++            }
++            
++            // Resend the tics we have
++            if (start_tic <= end_tic)
++            {
++                NET_CL_SendTics(start_tic, end_tic);
++            }
++            break;
++        }
++
++        case NET_PACKET_TYPE_LAUNCH:
++        {
++            fprintf(stderr, "NET_CL_ParsePacket: Received LAUNCH signal!\n");
++            net_waiting_for_launch = false;
++            fprintf(stderr, "NET_CL_ParsePacket: net_waiting_for_launch = %d\n", net_waiting_for_launch);
++            break;
++        }
++
++        case NET_PACKET_TYPE_DISCONNECT:
++        case NET_PACKET_TYPE_DISCONNECT_ACK:
++        {
++            printf("NET_CL_ParsePacket: Server disconnected\n");
++            client_state = CLIENT_STATE_DISCONNECTED;
++            net_client_connected = false;
++            break;
++        }
++
++        default:
++            break;
++    }
++}
++
++static unsigned int reliable_send_seq = 0;
++
++void NET_CL_LaunchGame(void)
++{
++    net_packet_t *packet;
++
++    if (!net_client_connected)
++        return;
++
++    fprintf(stderr, "NET_CL_LaunchGame: Sending LAUNCH as reliable packet\n");
++
++    packet = NET_NewPacket(16);
++    if (packet != NULL)
++    {
++        // Send as reliable packet (like Chocolate Doom does)
++        NET_WriteInt16(packet, NET_PACKET_TYPE_LAUNCH | NET_RELIABLE_PACKET);
++        NET_WriteInt8(packet, reliable_send_seq & 0xFF);
++        reliable_send_seq++;
++        NET_SendPacket(server_addr, packet);
++        NET_FreePacket(packet);
++    }
++}
++
++void NET_CL_StartGame(net_gamesettings_t *settings)
++{
++    // Send game start request - MUST match chocolate-doom NET_WriteSettings order
++    net_packet_t *packet;
++    int i;
++
++    if (!net_client_connected)
++        return;
++
++    fprintf(stderr, "NET_CL_StartGame: Sending GAMESTART request (reliable)\n");
++
++    packet = NET_NewPacket(128);
++    if (packet != NULL)
++    {
++        // Send as reliable packet: set NET_RELIABLE_PACKET flag + sequence
++        NET_WriteInt16(packet, NET_PACKET_TYPE_GAMESTART | NET_RELIABLE_PACKET);
++        NET_WriteInt8(packet, reliable_send_seq & 0xFF);
++        reliable_send_seq++;
++        
++        // Game settings - order MUST match NET_WriteSettings/NET_ReadSettings
++        NET_WriteInt8(packet, settings->ticdup);
++        NET_WriteInt8(packet, settings->extratics);
++        NET_WriteInt8(packet, settings->deathmatch);
++        NET_WriteInt8(packet, settings->nomonsters);
++        NET_WriteInt8(packet, settings->fast_monsters);
++        NET_WriteInt8(packet, settings->respawn_monsters);
++        NET_WriteInt8(packet, settings->episode);
++        NET_WriteInt8(packet, settings->map);
++        NET_WriteInt8(packet, settings->skill);
++        NET_WriteInt8(packet, settings->gameversion);
++        NET_WriteInt8(packet, settings->lowres_turn);
++        NET_WriteInt8(packet, settings->new_sync);
++        NET_WriteInt32(packet, settings->timelimit);  // INT32!
++        NET_WriteInt8(packet, settings->loadgame);
++        NET_WriteInt8(packet, 0);  // random
++        NET_WriteInt8(packet, settings->num_players > 0 ? settings->num_players : 2);  // num_players
++        NET_WriteInt8(packet, settings->consoleplayer);  // consoleplayer
++        
++        // Player classes for each player
++        for (i = 0; i < NET_MAXPLAYERS; i++)
++        {
++            NET_WriteInt8(packet, settings->player_classes[i]);
++        }
++
++        NET_SendPacket(server_addr, packet);
++        NET_FreePacket(packet);
++    }
++}
++
++// Write a single ticcmd diff to the packet
++static void WriteTiccmdDiff(net_packet_t *packet, net_send_queue_t *sendobj)
++{
++    unsigned int diff = sendobj->diff;
++    ticcmd_t *cmd = &sendobj->cmd;
++    
++    NET_WriteInt8(packet, diff);
++    
++    if (diff & NET_TICDIFF_FORWARD)
++        NET_WriteInt8(packet, (unsigned int)cmd->forwardmove);
++    if (diff & NET_TICDIFF_SIDE)
++        NET_WriteInt8(packet, (unsigned int)cmd->sidemove);
++    if (diff & NET_TICDIFF_TURN)
++    {
++        if (received_settings.lowres_turn)
++            NET_WriteInt8(packet, cmd->angleturn >> 8);
++        else
++            NET_WriteInt16(packet, cmd->angleturn);
++    }
++    if (diff & NET_TICDIFF_BUTTONS)
++        NET_WriteInt8(packet, cmd->buttons);
++    if (diff & NET_TICDIFF_CONSISTANCY)
++        NET_WriteInt8(packet, cmd->consistancy);
++}
++
++// Send ticcmds from starttic to endtic
++static void NET_CL_SendTics(int starttic, int endtic)
++{
++    net_packet_t *packet;
++    int i;
++    
++    if (!net_client_connected || client_state != CLIENT_STATE_IN_GAME)
++        return;
++    
++    if (starttic < 0)
++        starttic = 0;
++    
++    packet = NET_NewPacket(512);
++    if (packet == NULL)
++        return;
++    
++    // Header: type, ack, start, num_tics
++    NET_WriteInt16(packet, NET_PACKET_TYPE_GAMEDATA);
++    NET_WriteInt8(packet, recvwindow_start & 0xFF);
++    NET_WriteInt8(packet, starttic & 0xFF);
++    NET_WriteInt8(packet, endtic - starttic + 1);
++    
++    // Write each tic - but first count how many we actually have
++    int actual_tics = 0;
++    for (i = starttic; i <= endtic; i++)
++    {
++        net_send_queue_t *sendobj = &send_queue[i % BACKUPTICS];
++        if (sendobj->active && sendobj->seq == (unsigned int)i)
++            actual_tics++;
++        else
++            break;  // Stop at first missing tic
++    }
++    
++    if (actual_tics == 0)
++    {
++        NET_FreePacket(packet);
++        return;
++    }
++    
++    // Update num_tics in packet (position 4, after type(2)+ack(1)+start(1))
++    packet->data[4] = actual_tics;
++    
++    // Write each tic
++    for (i = starttic; i < starttic + actual_tics; i++)
++    {
++        net_send_queue_t *sendobj = &send_queue[i % BACKUPTICS];
++        
++        // Latency - time since we created this tic
++        int latency = I_GetTimeMS() - sendobj->time;
++        if (latency < 0) latency = 0;
++        NET_WriteInt16(packet, latency);
++        
++        // Ticcmd diff
++        WriteTiccmdDiff(packet, sendobj);
++    }
++    
++    NET_SendPacket(server_addr, packet);
++    NET_FreePacket(packet);
++}
++
++void NET_CL_SendTiccmd(ticcmd_t *ticcmd, int maketic)
++{
++    net_send_queue_t *sendobj;
++    unsigned int diff = 0;
++    int starttic, endtic;
++    
++    if (!net_client_connected || client_state != CLIENT_STATE_IN_GAME)
++        return;
++    
++    // Calculate diff from last command
++    if (ticcmd->forwardmove != last_ticcmd.forwardmove)
++        diff |= NET_TICDIFF_FORWARD;
++    if (ticcmd->sidemove != last_ticcmd.sidemove)
++        diff |= NET_TICDIFF_SIDE;
++    if (ticcmd->angleturn != last_ticcmd.angleturn)
++        diff |= NET_TICDIFF_TURN;
++    if (ticcmd->buttons != last_ticcmd.buttons)
++        diff |= NET_TICDIFF_BUTTONS;
++    // ALWAYS include consistency - critical for game sync!
++    diff |= NET_TICDIFF_CONSISTANCY;
++    
++    // Store in send queue
++    sendobj = &send_queue[maketic % BACKUPTICS];
++    sendobj->active = true;
++    sendobj->seq = maketic;
++    sendobj->time = I_GetTimeMS();
++    sendobj->diff = diff;
++    sendobj->cmd = *ticcmd;
++    
++    // Update last ticcmd for future diffs
++    last_ticcmd = *ticcmd;
++    
++    // Send just the current tic for now (simpler - avoid extratics complexity)
++    starttic = maketic;
++    endtic = maketic;
++    
++    NET_CL_SendTics(starttic, endtic);
++}
++
++boolean NET_CL_GetSettings(net_gamesettings_t *settings)
++{
++    if (!received_settings_valid)
++        return false;
++
++    memcpy(settings, &received_settings, sizeof(net_gamesettings_t));
++    return true;
++}
++
++void NET_Init(void)
++{
++    NET_CL_Init();
++}
++
++void NET_BindVariables(void)
++{
++    // Could bind config variables here
++}
++
++// Lobby UI functions
++#include "net_lobby.h"
++
++// NET_WaitForLaunch - Wait for LAUNCH signal in the lobby
++// Does NOT send GAMESTART - that happens in D_StartNetGame
++// Returns: true = game launched, false = user quit to browser
++boolean NET_WaitForLaunch(void)
++{
++    int last_num_players = -1;
++    int lobby_update_timer = 0;
++    int input;
++    
++    net_waiting_for_launch = true;
++
++    fprintf(stderr, "NET_WaitForLaunch: Waiting for game launch...\n");
++
++    while (net_waiting_for_launch && net_client_connected)
++    {
++        NET_CL_Run();
++        
++        // Check for input FIRST (always, even before we have wait data)
++        input = DG_CheckLobbyInput();
++        if (input == -1) {
++            // Red button - quit lobby and go back to browser
++            fprintf(stderr, "NET_WaitForLaunch: User quit lobby (RED button)\n");
++            NET_CL_Disconnect();
++            return false;
++        }
++        
++        // Update lobby display periodically or when player count changes
++        if (net_client_received_wait_data) {
++            if (net_client_wait_data.num_players != last_num_players || lobby_update_timer <= 0) {
++                DG_DrawLobby(net_client_wait_data.num_players,
++                            net_client_wait_data.max_players,
++                            net_client_wait_data.is_controller,
++                            net_client_wait_data.player_names,
++                            net_client_wait_data.player_addrs,
++                            net_client_wait_data.consoleplayer,
++                            NET_AddrToString(server_addr));
++                last_num_players = net_client_wait_data.num_players;
++                lobby_update_timer = 20;  // Update every ~1 second
++            }
++            lobby_update_timer--;
++            
++            if (input == 1 && net_client_wait_data.is_controller) {
++                // Controller pressed start (Green button)
++                fprintf(stderr, "NET_WaitForLaunch: Controller starting game!\n");
++                NET_CL_LaunchGame();
++            }
++        }
++        
++        I_Sleep(50);
++    }
++    
++    fprintf(stderr, "NET_WaitForLaunch: Got LAUNCH signal, returning to game init...\n");
++    return true;
++}
++
++// NET_CL_SendStartAndWait - Send GAMESTART and wait for server response
++// Called from D_StartNetGame after NET_WaitForLaunch returns
++void NET_CL_SendStartAndWait(net_gamesettings_t *settings)
++{
++    int timeout;
++    
++    if (!net_client_connected) {
++        fprintf(stderr, "NET_CL_SendStartAndWait: Not connected!\n");
++        return;
++    }
++    
++    fprintf(stderr, "NET_CL_SendStartAndWait: Sending GAMESTART request...\n");
++    
++    NET_CL_StartGame(settings);
++    
++    fprintf(stderr, "NET_CL_SendStartAndWait: Waiting for GAMESTART response...\n");
++    
++    // Wait for GAMESTART response with final settings from server
++    timeout = 0;
++    while (!received_settings_valid && net_client_connected && timeout < 200)
++    {
++        NET_CL_Run();
++        I_Sleep(50);
++        timeout++;
++    }
++    
++    fprintf(stderr, "NET_CL_SendStartAndWait: Done! settings_valid=%d connected=%d timeout=%d\n", 
++            received_settings_valid, net_client_connected, timeout);
++}
++
++net_addr_t *NET_FindLANServer(void)
++{
++    // LAN discovery not implemented
++    return NULL;
++}
++
++
++
+diff --git a/doomgeneric/net_dedicated.c b/doomgeneric/net_dedicated.c
+new file mode 100644
+index 0000000..e66911b
+--- /dev/null
++++ b/doomgeneric/net_dedicated.c
+@@ -0,0 +1,19 @@
++//
++// Copyright(C) 2005-2014 Simon Howard
++// Copyright(C) 2026 WiFi Pineapple Pager port
++//
++// Dedicated server mode - stub
++//
++
++#include <stdio.h>
++
++#include "i_system.h"
++#include "net_dedicated.h"
++
++void NET_DedicatedServer(void)
++{
++    I_Error("Dedicated server mode not implemented");
++}
++
++
++
+diff --git a/doomgeneric/net_defs.h b/doomgeneric/net_defs.h
+index bedfb95..f1ab16e 100644
+--- a/doomgeneric/net_defs.h
++++ b/doomgeneric/net_defs.h
+@@ -100,7 +100,9 @@ struct _net_addr_s
+ 
+ // magic number sent when connecting to check this is a valid client
+ 
+-#define NET_MAGIC_NUMBER 3436803284U
++// Magic number changed in Chocolate Doom 3.1.0
++#define NET_MAGIC_NUMBER     1454104972U
++#define NET_OLD_MAGIC_NUMBER 3436803284U
+ 
+ // header field value indicating that the packet is a reliable packet
+ 
+diff --git a/doomgeneric/net_gui.h b/doomgeneric/net_gui.h
+index 4f4198b..444816f 100644
+--- a/doomgeneric/net_gui.h
++++ b/doomgeneric/net_gui.h
+@@ -23,7 +23,7 @@
+ 
+ #include "doomtype.h"
+ 
+-extern void NET_WaitForLaunch(void);
++extern boolean NET_WaitForLaunch(void);
+ 
+ #endif /* #ifndef NET_GUI_H */
+ 
+diff --git a/doomgeneric/net_io.c b/doomgeneric/net_io.c
+new file mode 100644
+index 0000000..f531025
+--- /dev/null
++++ b/doomgeneric/net_io.c
+@@ -0,0 +1,112 @@
++//
++// Copyright(C) 2005-2014 Simon Howard
++// Copyright(C) 2026 WiFi Pineapple Pager port
++//
++// Network I/O layer - manages network contexts and modules
++//
++
++#include <stdlib.h>
++#include <string.h>
++
++#include "net_io.h"
++#include "net_packet.h"
++
++#define MAX_MODULES 16
++
++struct _net_context_s
++{
++    net_module_t *modules[MAX_MODULES];
++    int num_modules;
++};
++
++// Broadcast address placeholder
++net_addr_t net_broadcast_addr;
++
++net_context_t *NET_NewContext(void)
++{
++    net_context_t *context;
++
++    context = malloc(sizeof(net_context_t));
++    if (context == NULL)
++        return NULL;
++
++    context->num_modules = 0;
++    return context;
++}
++
++void NET_AddModule(net_context_t *context, net_module_t *module)
++{
++    if (context->num_modules >= MAX_MODULES)
++        return;
++
++    context->modules[context->num_modules] = module;
++    context->num_modules++;
++}
++
++void NET_SendPacket(net_addr_t *addr, net_packet_t *packet)
++{
++    if (addr == NULL || addr->module == NULL)
++        return;
++
++    addr->module->SendPacket(addr, packet);
++}
++
++void NET_SendBroadcast(net_context_t *context, net_packet_t *packet)
++{
++    // For now, broadcast is not implemented
++    // Would need to send to 255.255.255.255 on each module
++}
++
++boolean NET_RecvPacket(net_context_t *context, net_addr_t **addr,
++                       net_packet_t **packet)
++{
++    int i;
++
++    for (i = 0; i < context->num_modules; i++)
++    {
++        if (context->modules[i]->RecvPacket(addr, packet))
++            return true;
++    }
++
++    return false;
++}
++
++char *NET_AddrToString(net_addr_t *addr)
++{
++    static char buffer[128];
++
++    if (addr == NULL || addr->module == NULL)
++    {
++        strcpy(buffer, "(null)");
++        return buffer;
++    }
++
++    addr->module->AddrToString(addr, buffer, sizeof(buffer));
++    return buffer;
++}
++
++void NET_FreeAddress(net_addr_t *addr)
++{
++    if (addr == NULL || addr->module == NULL)
++        return;
++
++    addr->module->FreeAddress(addr);
++}
++
++net_addr_t *NET_ResolveAddress(net_context_t *context, char *address)
++{
++    net_addr_t *result;
++    int i;
++
++    for (i = 0; i < context->num_modules; i++)
++    {
++        result = context->modules[i]->ResolveAddress(address);
++        if (result != NULL)
++            return result;
++    }
++
++    return NULL;
++}
++
++
++
+diff --git a/doomgeneric/net_lobby.c b/doomgeneric/net_lobby.c
+new file mode 100644
+index 0000000..8858ab1
+--- /dev/null
++++ b/doomgeneric/net_lobby.c
+@@ -0,0 +1,706 @@
++//
++// Copyright(C) 2026 WiFi Pineapple Pager port
++//
++// Simple lobby screen for multiplayer waiting room
++//
++
++#include <stdio.h>
++#include <string.h>
++#include <unistd.h>
++#include <fcntl.h>
++#include <sys/ioctl.h>
++#include <linux/fb.h>
++
++#include "doomtype.h"
++#include "net_defs.h"
++#include "net_query.h"
++
++// Embedded 8x8 font (basic ASCII 32-127)
++// Simple monospace bitmap font for lobby text
++static const unsigned char font8x8[][8] = {
++    // Space (32)
++    {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
++    // ! (33)
++    {0x18, 0x18, 0x18, 0x18, 0x18, 0x00, 0x18, 0x00},
++    // " (34)
++    {0x6C, 0x6C, 0x24, 0x00, 0x00, 0x00, 0x00, 0x00},
++    // # (35)
++    {0x6C, 0xFE, 0x6C, 0x6C, 0xFE, 0x6C, 0x00, 0x00},
++    // $ (36)
++    {0x18, 0x7E, 0xC0, 0x7C, 0x06, 0xFC, 0x18, 0x00},
++    // % (37)
++    {0xC6, 0xCC, 0x18, 0x30, 0x66, 0xC6, 0x00, 0x00},
++    // & (38)
++    {0x38, 0x6C, 0x38, 0x76, 0xDC, 0xCC, 0x76, 0x00},
++    // ' (39)
++    {0x18, 0x18, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00},
++    // ( (40)
++    {0x0C, 0x18, 0x30, 0x30, 0x30, 0x18, 0x0C, 0x00},
++    // ) (41)
++    {0x30, 0x18, 0x0C, 0x0C, 0x0C, 0x18, 0x30, 0x00},
++    // * (42)
++    {0x00, 0x66, 0x3C, 0xFF, 0x3C, 0x66, 0x00, 0x00},
++    // + (43)
++    {0x00, 0x18, 0x18, 0x7E, 0x18, 0x18, 0x00, 0x00},
++    // , (44)
++    {0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x30},
++    // - (45)
++    {0x00, 0x00, 0x00, 0x7E, 0x00, 0x00, 0x00, 0x00},
++    // . (46)
++    {0x00, 0x00, 0x00, 0x00, 0x00, 0x18, 0x18, 0x00},
++    // / (47)
++    {0x06, 0x0C, 0x18, 0x30, 0x60, 0xC0, 0x00, 0x00},
++    // 0 (48)
++    {0x7C, 0xC6, 0xCE, 0xD6, 0xE6, 0xC6, 0x7C, 0x00},
++    // 1 (49)
++    {0x18, 0x38, 0x18, 0x18, 0x18, 0x18, 0x7E, 0x00},
++    // 2 (50)
++    {0x7C, 0xC6, 0x06, 0x1C, 0x30, 0x66, 0xFE, 0x00},
++    // 3 (51)
++    {0x7C, 0xC6, 0x06, 0x3C, 0x06, 0xC6, 0x7C, 0x00},
++    // 4 (52)
++    {0x1C, 0x3C, 0x6C, 0xCC, 0xFE, 0x0C, 0x1E, 0x00},
++    // 5 (53)
++    {0xFE, 0xC0, 0xFC, 0x06, 0x06, 0xC6, 0x7C, 0x00},
++    // 6 (54)
++    {0x38, 0x60, 0xC0, 0xFC, 0xC6, 0xC6, 0x7C, 0x00},
++    // 7 (55)
++    {0xFE, 0xC6, 0x0C, 0x18, 0x30, 0x30, 0x30, 0x00},
++    // 8 (56)
++    {0x7C, 0xC6, 0xC6, 0x7C, 0xC6, 0xC6, 0x7C, 0x00},
++    // 9 (57)
++    {0x7C, 0xC6, 0xC6, 0x7E, 0x06, 0x0C, 0x78, 0x00},
++    // : (58)
++    {0x00, 0x18, 0x18, 0x00, 0x00, 0x18, 0x18, 0x00},
++    // ; (59)
++    {0x00, 0x18, 0x18, 0x00, 0x00, 0x18, 0x18, 0x30},
++    // < (60)
++    {0x06, 0x0C, 0x18, 0x30, 0x18, 0x0C, 0x06, 0x00},
++    // = (61)
++    {0x00, 0x00, 0x7E, 0x00, 0x7E, 0x00, 0x00, 0x00},
++    // > (62)
++    {0x60, 0x30, 0x18, 0x0C, 0x18, 0x30, 0x60, 0x00},
++    // ? (63)
++    {0x7C, 0xC6, 0x0C, 0x18, 0x18, 0x00, 0x18, 0x00},
++    // @ (64)
++    {0x7C, 0xC6, 0xDE, 0xDE, 0xDE, 0xC0, 0x78, 0x00},
++    // A-Z (65-90)
++    {0x38, 0x6C, 0xC6, 0xFE, 0xC6, 0xC6, 0xC6, 0x00}, // A
++    {0xFC, 0x66, 0x66, 0x7C, 0x66, 0x66, 0xFC, 0x00}, // B
++    {0x3C, 0x66, 0xC0, 0xC0, 0xC0, 0x66, 0x3C, 0x00}, // C
++    {0xF8, 0x6C, 0x66, 0x66, 0x66, 0x6C, 0xF8, 0x00}, // D
++    {0xFE, 0x62, 0x68, 0x78, 0x68, 0x62, 0xFE, 0x00}, // E
++    {0xFE, 0x62, 0x68, 0x78, 0x68, 0x60, 0xF0, 0x00}, // F
++    {0x3C, 0x66, 0xC0, 0xC0, 0xCE, 0x66, 0x3E, 0x00}, // G
++    {0xC6, 0xC6, 0xC6, 0xFE, 0xC6, 0xC6, 0xC6, 0x00}, // H
++    {0x3C, 0x18, 0x18, 0x18, 0x18, 0x18, 0x3C, 0x00}, // I
++    {0x1E, 0x0C, 0x0C, 0x0C, 0xCC, 0xCC, 0x78, 0x00}, // J
++    {0xE6, 0x66, 0x6C, 0x78, 0x6C, 0x66, 0xE6, 0x00}, // K
++    {0xF0, 0x60, 0x60, 0x60, 0x62, 0x66, 0xFE, 0x00}, // L
++    {0xC6, 0xEE, 0xFE, 0xFE, 0xD6, 0xC6, 0xC6, 0x00}, // M
++    {0xC6, 0xE6, 0xF6, 0xDE, 0xCE, 0xC6, 0xC6, 0x00}, // N
++    {0x7C, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0x7C, 0x00}, // O
++    {0xFC, 0x66, 0x66, 0x7C, 0x60, 0x60, 0xF0, 0x00}, // P
++    {0x7C, 0xC6, 0xC6, 0xC6, 0xD6, 0xDE, 0x7C, 0x06}, // Q
++    {0xFC, 0x66, 0x66, 0x7C, 0x6C, 0x66, 0xE6, 0x00}, // R
++    {0x7C, 0xC6, 0x60, 0x38, 0x0C, 0xC6, 0x7C, 0x00}, // S
++    {0x7E, 0x5A, 0x18, 0x18, 0x18, 0x18, 0x3C, 0x00}, // T
++    {0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0xC6, 0x7C, 0x00}, // U
++    {0xC6, 0xC6, 0xC6, 0xC6, 0x6C, 0x38, 0x10, 0x00}, // V
++    {0xC6, 0xC6, 0xD6, 0xFE, 0xFE, 0xEE, 0xC6, 0x00}, // W
++    {0xC6, 0x6C, 0x38, 0x38, 0x38, 0x6C, 0xC6, 0x00}, // X
++    {0x66, 0x66, 0x66, 0x3C, 0x18, 0x18, 0x3C, 0x00}, // Y
++    {0xFE, 0xC6, 0x8C, 0x18, 0x32, 0x66, 0xFE, 0x00}, // Z
++    // [ (91)
++    {0x3C, 0x30, 0x30, 0x30, 0x30, 0x30, 0x3C, 0x00},
++    // \ (92)
++    {0xC0, 0x60, 0x30, 0x18, 0x0C, 0x06, 0x00, 0x00},
++    // ] (93)
++    {0x3C, 0x0C, 0x0C, 0x0C, 0x0C, 0x0C, 0x3C, 0x00},
++    // ^ (94)
++    {0x10, 0x38, 0x6C, 0xC6, 0x00, 0x00, 0x00, 0x00},
++    // _ (95)
++    {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF},
++    // ` (96)
++    {0x30, 0x18, 0x0C, 0x00, 0x00, 0x00, 0x00, 0x00},
++    // a-z (97-122) - lowercase
++    {0x00, 0x00, 0x78, 0x0C, 0x7C, 0xCC, 0x76, 0x00}, // a
++    {0xE0, 0x60, 0x7C, 0x66, 0x66, 0x66, 0xDC, 0x00}, // b
++    {0x00, 0x00, 0x7C, 0xC6, 0xC0, 0xC6, 0x7C, 0x00}, // c
++    {0x1C, 0x0C, 0x7C, 0xCC, 0xCC, 0xCC, 0x76, 0x00}, // d
++    {0x00, 0x00, 0x7C, 0xC6, 0xFE, 0xC0, 0x7C, 0x00}, // e
++    {0x38, 0x6C, 0x60, 0xF0, 0x60, 0x60, 0xF0, 0x00}, // f
++    {0x00, 0x00, 0x76, 0xCC, 0xCC, 0x7C, 0x0C, 0x78}, // g
++    {0xE0, 0x60, 0x6C, 0x76, 0x66, 0x66, 0xE6, 0x00}, // h
++    {0x18, 0x00, 0x38, 0x18, 0x18, 0x18, 0x3C, 0x00}, // i
++    {0x06, 0x00, 0x0E, 0x06, 0x06, 0x66, 0x66, 0x3C}, // j
++    {0xE0, 0x60, 0x66, 0x6C, 0x78, 0x6C, 0xE6, 0x00}, // k
++    {0x38, 0x18, 0x18, 0x18, 0x18, 0x18, 0x3C, 0x00}, // l
++    {0x00, 0x00, 0xCC, 0xFE, 0xFE, 0xD6, 0xC6, 0x00}, // m
++    {0x00, 0x00, 0xDC, 0x66, 0x66, 0x66, 0x66, 0x00}, // n
++    {0x00, 0x00, 0x7C, 0xC6, 0xC6, 0xC6, 0x7C, 0x00}, // o
++    {0x00, 0x00, 0xDC, 0x66, 0x66, 0x7C, 0x60, 0xF0}, // p
++    {0x00, 0x00, 0x76, 0xCC, 0xCC, 0x7C, 0x0C, 0x1E}, // q
++    {0x00, 0x00, 0xDC, 0x76, 0x66, 0x60, 0xF0, 0x00}, // r
++    {0x00, 0x00, 0x7C, 0xC0, 0x7C, 0x06, 0xFC, 0x00}, // s
++    {0x30, 0x30, 0xFC, 0x30, 0x30, 0x36, 0x1C, 0x00}, // t
++    {0x00, 0x00, 0xCC, 0xCC, 0xCC, 0xCC, 0x76, 0x00}, // u
++    {0x00, 0x00, 0xC6, 0xC6, 0xC6, 0x6C, 0x38, 0x00}, // v
++    {0x00, 0x00, 0xC6, 0xD6, 0xFE, 0xFE, 0x6C, 0x00}, // w
++    {0x00, 0x00, 0xC6, 0x6C, 0x38, 0x6C, 0xC6, 0x00}, // x
++    {0x00, 0x00, 0xC6, 0xC6, 0xC6, 0x7E, 0x06, 0x7C}, // y
++    {0x00, 0x00, 0xFE, 0x8C, 0x18, 0x32, 0xFE, 0x00}, // z
++};
++
++// Framebuffer access (defined in doomgeneric_linuxvt.c)
++extern int fbFd;
++extern unsigned int fbWidth, fbHeight;
++extern uint16_t *renderBuffer;
++extern size_t renderBufferSize;
++
++// Virtual screen dimensions after 90° CCW rotation
++// Physical: 222x480, Virtual (for content): 480x222
++#define LOBBY_WIDTH  480
++#define LOBBY_HEIGHT 222
++
++// RGB565 color definitions
++#define RGB565_BLACK    0x0000
++#define RGB565_WHITE    0xFFFF
++#define RGB565_RED      0xF800
++#define RGB565_GREEN    0x07E0
++#define RGB565_BLUE     0x001F
++#define RGB565_YELLOW   0xFFE0
++#define RGB565_CYAN     0x07FF
++#define RGB565_MAGENTA  0xF81F
++#define RGB565_ORANGE   0xFD20
++#define RGB565_DOOM_RED 0xA800  // Dark red for DOOM theme
++
++// Set a pixel with 90° CW rotation (to match game orientation)
++// Virtual (x,y) in 480x222 space -> Physical in 222x480 framebuffer
++static inline void lobby_set_pixel(int vx, int vy, uint16_t color)
++{
++    // 90° CW rotation: (vx, vy) -> (LOBBY_HEIGHT-1-vy, vx)
++    int px = LOBBY_HEIGHT - 1 - vy;
++    int py = vx;
++    
++    if (px >= 0 && px < (int)fbWidth && py >= 0 && py < (int)fbHeight) {
++        renderBuffer[py * fbWidth + px] = color;
++    }
++}
++
++// Draw a single character at virtual (x,y)
++static void lobby_draw_char(int x, int y, char c, uint16_t color)
++{
++    if (c < 32 || c > 122) c = '?';
++    int idx = c - 32;
++    if (idx < 0 || idx >= (int)(sizeof(font8x8)/sizeof(font8x8[0])))
++        return;
++    
++    const unsigned char *glyph = font8x8[idx];
++    
++    // Draw each pixel of the 8x8 glyph
++    for (int gy = 0; gy < 8; gy++) {
++        unsigned char row = glyph[gy];
++        for (int gx = 0; gx < 8; gx++) {
++            if (row & (0x80 >> gx)) {
++                lobby_set_pixel(x + gx, y + gy, color);
++            }
++        }
++    }
++}
++
++// Draw a string at virtual (x,y)
++static void lobby_draw_string(int x, int y, const char *str, uint16_t color)
++{
++    while (*str) {
++        lobby_draw_char(x, y, *str, color);
++        x += 8;  // 8 pixels per character
++        str++;
++    }
++}
++
++// Draw a centered string (centered in virtual 480-wide space)
++static void lobby_draw_centered(int y, const char *str, uint16_t color)
++{
++    int len = strlen(str);
++    int x = (LOBBY_WIDTH - len * 8) / 2;
++    lobby_draw_string(x, y, str, color);
++}
++
++// Draw a filled rectangle in virtual coordinates
++static void lobby_fill_rect(int x, int y, int w, int h, uint16_t color)
++{
++    for (int vy = y; vy < y + h && vy < LOBBY_HEIGHT; vy++) {
++        for (int vx = x; vx < x + w && vx < LOBBY_WIDTH; vx++) {
++            if (vx >= 0 && vy >= 0) {
++                lobby_set_pixel(vx, vy, color);
++            }
++        }
++    }
++}
++
++// Clear the screen
++static void lobby_clear(uint16_t color)
++{
++    for (size_t i = 0; i < fbWidth * fbHeight; i++) {
++        renderBuffer[i] = color;
++    }
++}
++
++// Flush the render buffer to screen
++static void lobby_flush(void)
++{
++    if (fbFd >= 0 && renderBuffer) {
++        lseek(fbFd, 0, SEEK_SET);
++        write(fbFd, renderBuffer, renderBufferSize);
++    }
++}
++
++// Draw loading screen with real-time info
++void DG_DrawLoadingBrowser(const char *message)
++{
++    lobby_clear(0x0841);  // Very dark gray background
++    
++    // Title bar
++    lobby_fill_rect(0, 0, LOBBY_WIDTH, 24, RGB565_DOOM_RED);
++    lobby_draw_centered(8, "DOOM DEATHMATCH", RGB565_WHITE);
++    
++    // Message centered on screen
++    if (message) {
++        lobby_draw_centered(100, message, RGB565_YELLOW);
++    }
++    
++    lobby_flush();
++}
++
++// Draw loading screen for auto-match with real-time progress
++void DG_DrawLoadingAutoMatch(int servers_found, int ports_scanned)
++{
++    char buf[64];
++    
++    lobby_clear(0x0841);  // Very dark gray
++    
++    // Title bar
++    lobby_fill_rect(0, 0, LOBBY_WIDTH, 24, RGB565_DOOM_RED);
++    lobby_draw_centered(8, "DOOM DEATHMATCH", RGB565_WHITE);
++    
++    // Scanning status
++    lobby_draw_centered(70, "SCANNING FOR SERVERS", RGB565_YELLOW);
++    
++    // Real-time stats
++    snprintf(buf, sizeof(buf), "Port: %d", DEFAULT_BASE_PORT + ports_scanned - 1);
++    lobby_draw_centered(100, buf, RGB565_CYAN);
++    
++    snprintf(buf, sizeof(buf), "Found: %d server%s", 
++             servers_found, servers_found == 1 ? "" : "s");
++    lobby_draw_centered(130, buf, servers_found > 0 ? RGB565_GREEN : RGB565_WHITE);
++    
++    lobby_flush();
++}
++
++// Main lobby drawing function - called from NET_WaitForLaunch
++// Uses virtual 480x222 coordinate system (rotated 90° CW to physical 222x480)
++void DG_DrawLobby(int num_players, int max_players, int is_controller, 
++                  const char player_names[NET_MAXPLAYERS][MAXPLAYERNAME],
++                  const char player_addrs[NET_MAXPLAYERS][MAXPLAYERNAME],
++                  int consoleplayer,
++                  const char *server_addr)
++{
++    char buf[80];
++    int y = 15;
++    
++    // Clear to dark background
++    lobby_clear(0x1082);  // Dark gray-blue
++    
++    // Title with red accent box (full width of virtual screen)
++    lobby_fill_rect(0, 5, LOBBY_WIDTH, 35, RGB565_DOOM_RED);
++    lobby_draw_centered(10, "DOOM DEATHMATCH LOBBY", RGB565_WHITE);
++    
++    // Show server address (so users can share with friends)
++    if (server_addr && server_addr[0]) {
++        snprintf(buf, sizeof(buf), "%s", server_addr);
++        lobby_draw_centered(22, buf, RGB565_CYAN);
++    }
++    
++    y = 48;
++    
++    // Player count
++    snprintf(buf, sizeof(buf), "Players: %d / %d", num_players, max_players);
++    lobby_draw_centered(y, buf, RGB565_WHITE);
++    y += 14;
++    
++    // Separator line
++    lobby_fill_rect(30, y, LOBBY_WIDTH - 60, 2, RGB565_CYAN);
++    y += 8;
++    
++    // Player list (max 4 players in DOOM deathmatch)
++    for (int i = 0; i < max_players && i < 4; i++) {
++        if (i < num_players) {
++            uint16_t color = (i == consoleplayer) ? RGB565_YELLOW : RGB565_GREEN;
++            const char *name = player_names[i][0] ? player_names[i] : "Player";
++            
++            if (i == consoleplayer) {
++                snprintf(buf, sizeof(buf), "%d. %s (YOU)", i + 1, name);
++            } else {
++                snprintf(buf, sizeof(buf), "%d. %s", i + 1, name);
++            }
++            lobby_draw_centered(y, buf, color);
++        } else {
++            snprintf(buf, sizeof(buf), "%d. ---", i + 1);
++            lobby_draw_centered(y, buf, 0x4208);  // Gray
++        }
++        y += 20;
++    }
++    
++    // Instructions at bottom
++    y = LOBBY_HEIGHT - 40;
++    
++    if (is_controller) {
++        lobby_draw_centered(y, "GREEN = START GAME", RGB565_GREEN);
++    } else {
++        lobby_draw_centered(y, "Waiting for host...", RGB565_YELLOW);
++    }
++    y += 12;
++    lobby_draw_centered(y, "RED = Quit", RGB565_RED);
++    
++    // Flush to screen
++    lobby_flush();
++}
++
++// DG_CheckLobbyInput is defined in doomgeneric_linuxvt.c
++// (has access to input file descriptors)
++
++//=============================================================================
++// SERVER BROWSER UI
++//=============================================================================
++
++#include "net_query.h"
++#include "i_timer.h"
++
++// Browser state
++static int browser_selection = 0;
++static int browser_scroll = 0;
++static boolean browser_querying = false;
++static unsigned int browser_last_query = 0;
++static unsigned int browser_last_refresh = 0;
++
++// Number of servers visible at once
++#define BROWSER_VISIBLE_SERVERS 4
++
++// Auto-refresh interval (milliseconds)
++#define BROWSER_AUTO_REFRESH_MS 10000
++
++// Browser state enum
++typedef enum {
++    BROWSER_STATE_IDLE,
++    BROWSER_STATE_QUERYING,
++    BROWSER_STATE_READY,
++    BROWSER_STATE_CONNECTING,
++} browser_state_t;
++
++static browser_state_t browser_state = BROWSER_STATE_IDLE;
++
++// Initialize browser
++void DG_Browser_Init(void)
++{
++    browser_selection = 0;
++    browser_scroll = 0;
++    browser_state = BROWSER_STATE_IDLE;
++    browser_last_refresh = 0;
++    
++    // Show loading screen
++    DG_DrawLoadingBrowser("INITIALIZING...");
++    
++    // Initialize query system
++    NET_Query_Init();
++}
++
++// Start querying servers (includes auto-discovery)
++void DG_Browser_Refresh(void)
++{
++    browser_state = BROWSER_STATE_QUERYING;
++    browser_querying = true;
++    browser_last_query = I_GetTimeMS();
++    
++    // Show loading screen before discovery
++    DG_DrawLoadingBrowser("SCANNING FOR SERVERS...");
++    
++    // NET_Query_StartAll will auto-discover servers if none are configured
++    NET_Query_StartAll();
++}
++
++// Update browser state (call every frame)
++void DG_Browser_Update(void)
++{
++    unsigned int now = I_GetTimeMS();
++    
++    if (browser_querying)
++    {
++        if (NET_Query_Poll())
++        {
++            browser_querying = false;
++            browser_state = BROWSER_STATE_READY;
++            browser_last_refresh = now;
++        }
++    }
++    else if (browser_state == BROWSER_STATE_READY)
++    {
++        // Auto-refresh every 10 seconds
++        if (now - browser_last_refresh >= BROWSER_AUTO_REFRESH_MS)
++        {
++            DG_Browser_Refresh();
++        }
++    }
++}
++
++// Move selection up
++void DG_Browser_SelectUp(void)
++{
++    if (browser_selection > 0)
++    {
++        browser_selection--;
++        if (browser_selection < browser_scroll)
++            browser_scroll = browser_selection;
++    }
++}
++
++// Move selection down
++void DG_Browser_SelectDown(void)
++{
++    int count = NET_Query_GetServerCount();
++    if (browser_selection < count - 1)
++    {
++        browser_selection++;
++        if (browser_selection >= browser_scroll + BROWSER_VISIBLE_SERVERS)
++            browser_scroll = browser_selection - BROWSER_VISIBLE_SERVERS + 1;
++    }
++}
++
++// Get selected server address
++const char *DG_Browser_GetSelectedAddress(void)
++{
++    return NET_Query_GetServerAddress(browser_selection);
++}
++
++// Get auto-matched server address
++const char *DG_Browser_GetAutoMatchAddress(void)
++{
++    int best = NET_Query_FindBestServer();
++    if (best >= 0)
++        return NET_Query_GetServerAddress(best);
++    return NULL;
++}
++
++// Draw the server browser screen
++void DG_DrawBrowser(void)
++{
++    char buf[80];
++    int y = 5;
++    int server_count = NET_Query_GetServerCount();
++    
++    // Clear to dark background
++    lobby_clear(0x1082);  // Dark gray-blue
++    
++    // Title bar
++    lobby_fill_rect(0, 0, LOBBY_WIDTH, 28, RGB565_DOOM_RED);
++    lobby_draw_centered(5, "DOOM SERVER BROWSER", RGB565_WHITE);
++    lobby_draw_centered(16, "Select a server to join", RGB565_YELLOW);
++    
++    y = 35;
++    
++    // Status line
++    if (browser_state == BROWSER_STATE_QUERYING)
++    {
++        if (server_count == 0)
++        {
++            lobby_draw_centered(y, "Discovering servers...", RGB565_CYAN);
++        }
++        else
++        {
++            lobby_draw_centered(y, "Refreshing...", RGB565_CYAN);
++        }
++    }
++    else
++    {
++        snprintf(buf, sizeof(buf), "%d servers found", server_count);
++        lobby_draw_centered(y, buf, RGB565_WHITE);
++    }
++    y += 14;
++    
++    // Separator
++    lobby_fill_rect(20, y, LOBBY_WIDTH - 40, 1, RGB565_CYAN);
++    y += 6;
++    
++    // Server list
++    int list_start_y = y;
++    
++    for (int i = 0; i < BROWSER_VISIBLE_SERVERS && (i + browser_scroll) < server_count; i++)
++    {
++        int server_idx = i + browser_scroll;
++        boolean is_selected = (server_idx == browser_selection);
++        
++        net_querydata_t data;
++        char address[64];
++        unsigned int ping;
++        
++        // Draw selection highlight
++        if (is_selected)
++        {
++            lobby_fill_rect(5, y - 2, LOBBY_WIDTH - 10, 36, 0x3186);  // Brighter highlight
++            lobby_draw_string(8, y, ">", RGB565_YELLOW);  // Selection arrow
++        }
++        
++        // Get server info
++        if (NET_Query_GetServerInfo(server_idx, &data, address, sizeof(address), &ping))
++        {
++            // Server name (or address if no name)
++            const char *name = data.description[0] ? data.description : address;
++            uint16_t name_color = is_selected ? RGB565_YELLOW : RGB565_WHITE;
++            snprintf(buf, sizeof(buf), "%d. %s", server_idx + 1, name);
++            lobby_draw_string(20, y, buf, name_color);
++            y += 10;
++            
++            // Status line: players, state, ping
++            const char *state_str;
++            uint16_t state_color;
++            
++            if (data.server_state == 0)  // Waiting
++            {
++                if (data.num_players >= data.max_players)
++                {
++                    state_str = "FULL";
++                    state_color = RGB565_RED;
++                }
++                else if (data.num_players > 0)
++                {
++                    state_str = "WAITING";
++                    state_color = RGB565_GREEN;
++                }
++                else
++                {
++                    state_str = "EMPTY";
++                    state_color = RGB565_CYAN;
++                }
++            }
++            else  // In game
++            {
++                state_str = "IN GAME";
++                state_color = RGB565_ORANGE;
++            }
++            
++            snprintf(buf, sizeof(buf), "   %d/%d players - %s - %dms",
++                     data.num_players, data.max_players, state_str, ping);
++            lobby_draw_string(20, y, buf, state_color);
++            y += 10;
++            
++            // Server address (so users can share with PC friends)
++            snprintf(buf, sizeof(buf), "   %s", address);
++            lobby_draw_string(20, y, buf, 0x6B4D);  // Gray
++            y += 16;
++        }
++        else
++        {
++            // No response from this server
++            uint16_t color = is_selected ? RGB565_YELLOW : 0x8410;
++            snprintf(buf, sizeof(buf), "%d. %s", server_idx + 1, 
++                     NET_Query_GetServerAddress(server_idx));
++            lobby_draw_string(20, y, buf, color);
++            y += 10;
++            
++            lobby_draw_string(20, y, "   No response (offline?)", RGB565_RED);
++            y += 26;
++        }
++    }
++    
++    // Scroll indicators
++    if (browser_scroll > 0)
++    {
++        lobby_draw_string(LOBBY_WIDTH - 30, list_start_y, "^", RGB565_WHITE);
++    }
++    if (browser_scroll + BROWSER_VISIBLE_SERVERS < server_count)
++    {
++        lobby_draw_string(LOBBY_WIDTH - 30, list_start_y + (BROWSER_VISIBLE_SERVERS * 36) - 10, 
++                          "v", RGB565_WHITE);
++    }
++    
++    // Instructions at bottom
++    y = LOBBY_HEIGHT - 32;
++    lobby_fill_rect(0, y - 4, LOBBY_WIDTH, 40, 0x1082);
++    // Draw instructions with RED colored red
++    lobby_draw_string(60, y, "UP/DOWN: Select  GREEN: Join  ", RGB565_GREEN);
++    lobby_draw_string(300, y, "RED", RGB565_RED);
++    lobby_draw_string(324, y, ": Quit", RGB565_GREEN);
++    y += 12;
++    
++    // Show auto-refresh countdown
++    if (browser_state == BROWSER_STATE_READY && browser_last_refresh > 0)
++    {
++        unsigned int elapsed = I_GetTimeMS() - browser_last_refresh;
++        unsigned int remaining = (BROWSER_AUTO_REFRESH_MS - elapsed) / 1000;
++        if (remaining > 10) remaining = 10;
++        char refresh_buf[32];
++        snprintf(refresh_buf, sizeof(refresh_buf), "Auto-refresh in %ds", remaining);
++        lobby_draw_centered(y, refresh_buf, 0x8410);
++    }
++    else
++    {
++        lobby_draw_centered(y, "Auto-refresh: 10s", 0x8410);
++    }
++    
++    // Flush to screen
++    lobby_flush();
++}
++
++// Draw "Connecting..." screen
++void DG_DrawConnecting(const char *server_addr)
++{
++    char buf[80];
++    
++    lobby_clear(0x1082);
++    lobby_fill_rect(0, 80, LOBBY_WIDTH, 60, RGB565_DOOM_RED);
++    lobby_draw_centered(90, "CONNECTING...", RGB565_WHITE);
++    snprintf(buf, sizeof(buf), "%s", server_addr ? server_addr : "...");
++    lobby_draw_centered(110, buf, RGB565_YELLOW);
++    lobby_flush();
++}
++
++// Draw "Auto-matching..." screen  
++void DG_DrawAutoMatch(void)
++{
++    lobby_clear(0x1082);
++    
++    lobby_fill_rect(0, 50, LOBBY_WIDTH, 120, RGB565_DOOM_RED);
++    lobby_draw_centered(55, "AUTO-MATCHMAKING", RGB565_WHITE);
++    lobby_draw_centered(75, "Discovering servers...", RGB565_YELLOW);
++    
++    lobby_draw_centered(100, "Scanning ports for active servers", RGB565_CYAN);
++    
++    lobby_flush();
++}
++
++// Draw "No servers available" screen
++void DG_DrawNoServers(void)
++{
++    lobby_clear(0x1082);
++    
++    lobby_fill_rect(0, 70, LOBBY_WIDTH, 80, RGB565_DOOM_RED);
++    lobby_draw_centered(80, "NO SERVERS AVAILABLE", RGB565_WHITE);
++    lobby_draw_centered(100, "All servers are offline,", RGB565_YELLOW);
++    lobby_draw_centered(115, "full, or in-game", RGB565_YELLOW);
++    
++    lobby_draw_centered(160, "GREEN: Try again   RED: Exit", RGB565_CYAN);
++    
++    lobby_flush();
++}
++
++// Draw "Exiting..." screen
++void DG_DrawExiting(void)
++{
++    lobby_clear(0x0000);  // Black background
++    
++    lobby_fill_rect(0, 90, LOBBY_WIDTH, 40, RGB565_DOOM_RED);
++    lobby_draw_centered(100, "EXITING...", RGB565_WHITE);
++    
++    lobby_flush();
++}
++
+diff --git a/doomgeneric/net_lobby.h b/doomgeneric/net_lobby.h
+new file mode 100644
+index 0000000..d6b7873
+--- /dev/null
++++ b/doomgeneric/net_lobby.h
+@@ -0,0 +1,75 @@
++//
++// Copyright(C) 2026 WiFi Pineapple Pager port
++//
++// Network lobby and server browser UI
++//
++
++#ifndef NET_LOBBY_H
++#define NET_LOBBY_H
++
++#include "doomtype.h"
++#include "net_defs.h"
++
++//=============================================================================
++// Lobby Drawing (waiting room before game starts)
++//=============================================================================
++
++// Draw the multiplayer lobby screen
++void DG_DrawLobby(int num_players, int max_players, int is_controller, 
++                  const char player_names[NET_MAXPLAYERS][MAXPLAYERNAME],
++                  const char player_addrs[NET_MAXPLAYERS][MAXPLAYERNAME],
++                  int consoleplayer,
++                  const char *server_addr);
++
++//=============================================================================
++// Server Browser UI
++//=============================================================================
++
++// Initialize the browser
++void DG_Browser_Init(void);
++
++// Refresh server list (start querying)
++void DG_Browser_Refresh(void);
++
++// Update browser state (call every frame)
++void DG_Browser_Update(void);
++
++// Navigation
++void DG_Browser_SelectUp(void);
++void DG_Browser_SelectDown(void);
++
++// Get selected server address
++const char *DG_Browser_GetSelectedAddress(void);
++
++// Get auto-matched server address (smart matching)
++const char *DG_Browser_GetAutoMatchAddress(void);
++
++// Draw browser screen
++void DG_DrawBrowser(void);
++
++// Draw connection status screens
++void DG_DrawConnecting(const char *server_addr);
++void DG_DrawAutoMatch(void);
++void DG_DrawNoServers(void);
++void DG_DrawExiting(void);
++
++// Loading screens with DOOM skull sprite
++void DG_DrawLoadingBrowser(const char *message);
++void DG_DrawLoadingAutoMatch(int servers_found, int ports_scanned);
++
++//=============================================================================
++// Input (defined in doomgeneric_linuxvt.c)
++//=============================================================================
++
++// Check for lobby/browser input:
++//   1  = GREEN (select/join)
++//  -1  = RED (back/quit)
++//   2  = UP (navigate up)
++//   3  = DOWN (navigate down)
++//   4  = LEFT
++//   5  = RIGHT
++//   0  = nothing
++int DG_CheckLobbyInput(void);
++
++#endif /* #ifndef NET_LOBBY_H */
++
+diff --git a/doomgeneric/net_loop.c b/doomgeneric/net_loop.c
+new file mode 100644
+index 0000000..368e45c
+--- /dev/null
++++ b/doomgeneric/net_loop.c
+@@ -0,0 +1,192 @@
++//
++// Copyright(C) 2005-2014 Simon Howard
++// Copyright(C) 2026 WiFi Pineapple Pager port
++//
++// Loopback network module - for local server in same process
++//
++
++#include <stdlib.h>
++#include <string.h>
++
++#include "doomtype.h"
++#include "net_defs.h"
++#include "net_loop.h"
++#include "net_packet.h"
++
++#define MAX_QUEUE_SIZE 16
++
++typedef struct
++{
++    net_packet_t *packets[MAX_QUEUE_SIZE];
++    int head;
++    int tail;
++} packet_queue_t;
++
++static packet_queue_t client_queue;
++static packet_queue_t server_queue;
++static boolean client_initialized = false;
++static boolean server_initialized = false;
++
++// Loopback address
++static net_addr_t loopback_addr;
++
++static void QueueInit(packet_queue_t *queue)
++{
++    queue->head = 0;
++    queue->tail = 0;
++}
++
++static void QueuePush(packet_queue_t *queue, net_packet_t *packet)
++{
++    int next = (queue->head + 1) % MAX_QUEUE_SIZE;
++
++    if (next == queue->tail)
++    {
++        // Queue full, drop oldest
++        NET_FreePacket(queue->packets[queue->tail]);
++        queue->tail = (queue->tail + 1) % MAX_QUEUE_SIZE;
++    }
++
++    queue->packets[queue->head] = NET_PacketDup(packet);
++    queue->head = next;
++}
++
++static net_packet_t *QueuePop(packet_queue_t *queue)
++{
++    net_packet_t *packet;
++
++    if (queue->head == queue->tail)
++        return NULL;
++
++    packet = queue->packets[queue->tail];
++    queue->tail = (queue->tail + 1) % MAX_QUEUE_SIZE;
++
++    return packet;
++}
++
++// Client module functions
++
++static boolean NET_Loop_Client_InitClient(void)
++{
++    QueueInit(&client_queue);
++    client_initialized = true;
++    return true;
++}
++
++static boolean NET_Loop_Client_InitServer(void)
++{
++    return false;  // Client module can't be server
++}
++
++static void NET_Loop_Client_SendPacket(net_addr_t *addr, net_packet_t *packet)
++{
++    if (server_initialized)
++    {
++        QueuePush(&server_queue, packet);
++    }
++}
++
++static boolean NET_Loop_Client_RecvPacket(net_addr_t **addr, net_packet_t **packet)
++{
++    *packet = QueuePop(&client_queue);
++
++    if (*packet == NULL)
++        return false;
++
++    *addr = &loopback_addr;
++    return true;
++}
++
++static void NET_Loop_Client_AddrToString(net_addr_t *addr, char *buffer, int buffer_len)
++{
++    snprintf(buffer, buffer_len, "loopback");
++}
++
++static void NET_Loop_Client_FreeAddress(net_addr_t *addr)
++{
++    // Loopback address is static
++}
++
++static net_addr_t *NET_Loop_Client_ResolveAddress(char *addr)
++{
++    if (addr == NULL)
++    {
++        loopback_addr.module = &net_loop_client_module;
++        loopback_addr.handle = NULL;
++        return &loopback_addr;
++    }
++    return NULL;
++}
++
++// Server module functions
++
++static boolean NET_Loop_Server_InitClient(void)
++{
++    return false;  // Server module can't be client
++}
++
++static boolean NET_Loop_Server_InitServer(void)
++{
++    QueueInit(&server_queue);
++    server_initialized = true;
++    return true;
++}
++
++static void NET_Loop_Server_SendPacket(net_addr_t *addr, net_packet_t *packet)
++{
++    if (client_initialized)
++    {
++        QueuePush(&client_queue, packet);
++    }
++}
++
++static boolean NET_Loop_Server_RecvPacket(net_addr_t **addr, net_packet_t **packet)
++{
++    *packet = QueuePop(&server_queue);
++
++    if (*packet == NULL)
++        return false;
++
++    *addr = &loopback_addr;
++    return true;
++}
++
++static void NET_Loop_Server_AddrToString(net_addr_t *addr, char *buffer, int buffer_len)
++{
++    snprintf(buffer, buffer_len, "loopback");
++}
++
++static void NET_Loop_Server_FreeAddress(net_addr_t *addr)
++{
++    // Loopback address is static
++}
++
++static net_addr_t *NET_Loop_Server_ResolveAddress(char *addr)
++{
++    return NULL;
++}
++
++net_module_t net_loop_client_module =
++{
++    NET_Loop_Client_InitClient,
++    NET_Loop_Client_InitServer,
++    NET_Loop_Client_SendPacket,
++    NET_Loop_Client_RecvPacket,
++    NET_Loop_Client_AddrToString,
++    NET_Loop_Client_FreeAddress,
++    NET_Loop_Client_ResolveAddress,
++};
++
++net_module_t net_loop_server_module =
++{
++    NET_Loop_Server_InitClient,
++    NET_Loop_Server_InitServer,
++    NET_Loop_Server_SendPacket,
++    NET_Loop_Server_RecvPacket,
++    NET_Loop_Server_AddrToString,
++    NET_Loop_Server_FreeAddress,
++    NET_Loop_Server_ResolveAddress,
++};
++
++
++
+diff --git a/doomgeneric/net_packet.c b/doomgeneric/net_packet.c
+new file mode 100644
+index 0000000..a274cb2
+--- /dev/null
++++ b/doomgeneric/net_packet.c
+@@ -0,0 +1,203 @@
++//
++// Copyright(C) 2005-2014 Simon Howard
++// Copyright(C) 2026 WiFi Pineapple Pager port
++//
++// Network packet buffer management
++//
++
++#include <stdlib.h>
++#include <string.h>
++
++#include "net_packet.h"
++
++net_packet_t *NET_NewPacket(int initial_size)
++{
++    net_packet_t *packet;
++
++    packet = malloc(sizeof(net_packet_t));
++    if (packet == NULL)
++        return NULL;
++
++    packet->alloced = initial_size;
++    packet->data = malloc(initial_size);
++    if (packet->data == NULL)
++    {
++        free(packet);
++        return NULL;
++    }
++
++    packet->len = 0;
++    packet->pos = 0;
++
++    return packet;
++}
++
++net_packet_t *NET_PacketDup(net_packet_t *packet)
++{
++    net_packet_t *newpacket;
++
++    newpacket = NET_NewPacket(packet->len);
++    if (newpacket == NULL)
++        return NULL;
++
++    memcpy(newpacket->data, packet->data, packet->len);
++    newpacket->len = packet->len;
++
++    return newpacket;
++}
++
++void NET_FreePacket(net_packet_t *packet)
++{
++    free(packet->data);
++    free(packet);
++}
++
++// Ensure packet has enough space for 'size' more bytes
++static boolean NET_EnsureSpace(net_packet_t *packet, size_t size)
++{
++    size_t newsize;
++    byte *newdata;
++
++    if (packet->len + size <= packet->alloced)
++        return true;
++
++    // Need to grow the buffer
++    newsize = packet->alloced * 2;
++    while (newsize < packet->len + size)
++        newsize *= 2;
++
++    newdata = realloc(packet->data, newsize);
++    if (newdata == NULL)
++        return false;
++
++    packet->data = newdata;
++    packet->alloced = newsize;
++    return true;
++}
++
++// Read functions
++boolean NET_ReadInt8(net_packet_t *packet, unsigned int *data)
++{
++    if (packet->pos + 1 > packet->len)
++        return false;
++
++    *data = packet->data[packet->pos];
++    packet->pos += 1;
++    return true;
++}
++
++boolean NET_ReadInt16(net_packet_t *packet, unsigned int *data)
++{
++    if (packet->pos + 2 > packet->len)
++        return false;
++
++    // Big-endian (network byte order) - high byte first
++    *data = (packet->data[packet->pos] << 8)
++          | packet->data[packet->pos + 1];
++    packet->pos += 2;
++    return true;
++}
++
++boolean NET_ReadInt32(net_packet_t *packet, unsigned int *data)
++{
++    if (packet->pos + 4 > packet->len)
++        return false;
++
++    // Big-endian (network byte order) - highest byte first
++    *data = (packet->data[packet->pos] << 24)
++          | (packet->data[packet->pos + 1] << 16)
++          | (packet->data[packet->pos + 2] << 8)
++          | packet->data[packet->pos + 3];
++    packet->pos += 4;
++    return true;
++}
++
++boolean NET_ReadSInt8(net_packet_t *packet, signed int *data)
++{
++    unsigned int udata;
++    if (!NET_ReadInt8(packet, &udata))
++        return false;
++    *data = (signed char)udata;
++    return true;
++}
++
++boolean NET_ReadSInt16(net_packet_t *packet, signed int *data)
++{
++    unsigned int udata;
++    if (!NET_ReadInt16(packet, &udata))
++        return false;
++    *data = (signed short)udata;
++    return true;
++}
++
++boolean NET_ReadSInt32(net_packet_t *packet, signed int *data)
++{
++    if (!NET_ReadInt32(packet, (unsigned int *)data))
++        return false;
++    return true;
++}
++
++char *NET_ReadString(net_packet_t *packet)
++{
++    char *start;
++
++    start = (char *)packet->data + packet->pos;
++
++    // Search for NUL terminator
++    while (packet->pos < packet->len && packet->data[packet->pos] != '\0')
++        packet->pos++;
++
++    if (packet->pos >= packet->len)
++        return NULL;  // No terminator found
++
++    packet->pos++;  // Skip the NUL
++    return start;
++}
++
++// Write functions
++void NET_WriteInt8(net_packet_t *packet, unsigned int i)
++{
++    if (!NET_EnsureSpace(packet, 1))
++        return;
++
++    packet->data[packet->len] = i & 0xff;
++    packet->len += 1;
++}
++
++void NET_WriteInt16(net_packet_t *packet, unsigned int i)
++{
++    if (!NET_EnsureSpace(packet, 2))
++        return;
++
++    // Big-endian (network byte order) - high byte first
++    packet->data[packet->len] = (i >> 8) & 0xff;
++    packet->data[packet->len + 1] = i & 0xff;
++    packet->len += 2;
++}
++
++void NET_WriteInt32(net_packet_t *packet, unsigned int i)
++{
++    if (!NET_EnsureSpace(packet, 4))
++        return;
++
++    // Big-endian (network byte order) - highest byte first
++    packet->data[packet->len] = (i >> 24) & 0xff;
++    packet->data[packet->len + 1] = (i >> 16) & 0xff;
++    packet->data[packet->len + 2] = (i >> 8) & 0xff;
++    packet->data[packet->len + 3] = i & 0xff;
++    packet->len += 4;
++}
++
++void NET_WriteString(net_packet_t *packet, char *string)
++{
++    size_t len = strlen(string) + 1;
++
++    if (!NET_EnsureSpace(packet, len))
++        return;
++
++    memcpy(packet->data + packet->len, string, len);
++    packet->len += len;
++}
++
++
++
+diff --git a/doomgeneric/net_query.c b/doomgeneric/net_query.c
+new file mode 100644
+index 0000000..4904013
+--- /dev/null
++++ b/doomgeneric/net_query.c
+@@ -0,0 +1,675 @@
++//
++// Copyright(C) 2005-2014 Simon Howard
++// Copyright(C) 2026 WiFi Pineapple Pager port
++//
++// Server query and lobby browser functions
++//
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "doomtype.h"
++#include "i_timer.h"
++#include "net_defs.h"
++#include "net_io.h"
++#include "net_lobby.h"
++#include "net_packet.h"
++#include "net_query.h"
++#include "net_socket.h"
++
++// Query timeout in milliseconds
++#define QUERY_TIMEOUT_MS 2000
++#define QUERY_MAX_ATTEMPTS 3
++#define QUERY_RETRY_INTERVAL_MS 500
++
++// Maximum servers we can track
++#define MAX_SERVERS 16
++
++// Server states
++typedef enum
++{
++    SERVER_STATE_WAITING,    // Lobby, waiting for players
++    SERVER_STATE_IN_GAME,    // Game in progress
++} server_state_t;
++
++// Query target state
++typedef enum
++{
++    QUERY_STATE_IDLE,
++    QUERY_STATE_QUERYING,
++    QUERY_STATE_RESPONDED,
++    QUERY_STATE_TIMEOUT,
++} query_state_t;
++
++// Server entry for browser
++typedef struct
++{
++    char address[64];           // "ip:port" string
++    int port;
++    query_state_t query_state;
++    unsigned int query_time;    // When query was sent (ms)
++    unsigned int ping_time;     // RTT in ms
++    int query_attempts;
++    
++    // Query response data
++    boolean has_response;
++    char version[32];
++    int server_state;           // 0=waiting, 1=in_game
++    int num_players;
++    int max_players;
++    int gamemode;
++    int gamemission;
++    char description[64];
++    
++    // Cached net_addr for sending queries
++    net_addr_t *addr;
++} server_entry_t;
++
++// Server list
++static server_entry_t servers[MAX_SERVERS];
++static int num_servers = 0;
++
++// Query context
++static net_context_t *query_context = NULL;
++static boolean query_initialized = false;
++
++// Default server configuration is in net_query.h
++#define MAX_PORT_SCAN 16  // Maximum ports to scan from base
++
++// Discovery timeout (fast scanning - servers should respond quickly)
++#define DISCOVERY_TIMEOUT_MS 500
++#define DISCOVERY_MAX_ATTEMPTS 1
++
++// Forward declarations for internal functions
++static void NET_Query_SendQueryPacket(server_entry_t *server);
++static void NET_Query_ProcessResponses(void);
++void NET_Query_SortByPort(void);
++
++// Initialize the query system
++boolean NET_Query_Init(void)
++{
++    if (query_initialized)
++        return true;
++
++    // Create network context
++    query_context = NET_NewContext();
++    if (query_context == NULL)
++    {
++        fprintf(stderr, "NET_Query_Init: Failed to create context\n");
++        return false;
++    }
++
++    // Initialize socket module
++    if (!net_socket_module.InitClient())
++    {
++        fprintf(stderr, "NET_Query_Init: Failed to init socket\n");
++        return false;
++    }
++
++    NET_AddModule(query_context, &net_socket_module);
++    
++    // Initialize empty server list - will be populated by discovery
++    num_servers = 0;
++    memset(servers, 0, sizeof(servers));
++    
++    // Small delay to let socket settle before first query
++    I_Sleep(100);
++    
++    query_initialized = true;
++    printf("NET_Query_Init: Initialized (discovery pending)\n");
++    return true;
++}
++
++// Discover servers by scanning sequential ports
++// Starts at base_port and scans until it finds a non-responding port
++void NET_Query_DiscoverServers(const char *server_ip, int base_port)
++{
++    char addr_buf[64];
++    int port;
++    int consecutive_failures = 0;
++    int discovered = 0;
++    int ports_scanned = 0;
++    
++    printf("NET_Query_DiscoverServers: Scanning %s starting at port %d...\n", 
++           server_ip, base_port);
++    
++    // Show initial loading screen
++    DG_DrawLoadingAutoMatch(0, 0);
++    
++    // Clear existing server list
++    NET_Query_ClearServers();
++    
++    // Scan ports sequentially
++    for (port = base_port; port < base_port + MAX_PORT_SCAN && num_servers < MAX_SERVERS; port++)
++    {
++        ports_scanned++;
++        
++        // Update loading screen with progress
++        DG_DrawLoadingAutoMatch(discovered, ports_scanned);
++        
++        snprintf(addr_buf, sizeof(addr_buf), "%s:%d", server_ip, port);
++        
++        // Add server for querying
++        if (!NET_Query_AddServer(addr_buf))
++            break;
++        
++        server_entry_t *server = &servers[num_servers - 1];
++        
++        // Send query with shorter timeout for discovery
++        int attempts;
++        boolean got_response = false;
++        
++        for (attempts = 0; attempts < DISCOVERY_MAX_ATTEMPTS && !got_response; attempts++)
++        {
++            NET_Query_SendQueryPacket(server);
++            
++            // Wait for response with timeout
++            unsigned int start = I_GetTimeMS();
++            while (I_GetTimeMS() - start < DISCOVERY_TIMEOUT_MS)
++            {
++                NET_Query_ProcessResponses();
++                
++                if (server->has_response)
++                {
++                    got_response = true;
++                    // Update screen immediately when we find one
++                    DG_DrawLoadingAutoMatch(discovered + 1, ports_scanned);
++                    break;
++                }
++                I_Sleep(10);
++            }
++        }
++        
++        if (got_response)
++        {
++            printf("  Port %d: %s (%d/%d players)\n", 
++                   port, server->description, server->num_players, server->max_players);
++            consecutive_failures = 0;
++            discovered++;
++        }
++        else
++        {
++            // No response - remove this server from list
++            printf("  Port %d: No response\n", port);
++            if (server->addr != NULL)
++            {
++                NET_FreeAddress(server->addr);
++                server->addr = NULL;
++            }
++            num_servers--;
++            
++            consecutive_failures++;
++            
++            // Stop after 1 failure (first non-responding port = end of server list)
++            printf("NET_Query_DiscoverServers: Stopping scan (no response)\n");
++            break;
++        }
++    }
++    
++    printf("NET_Query_DiscoverServers: Found %d active servers\n", discovered);
++    
++    // Sort servers by port number for consistent ordering
++    NET_Query_SortByPort();
++}
++
++// Discover servers using default IP and base port
++void NET_Query_DiscoverDefaultServers(void)
++{
++    NET_Query_DiscoverServers(DEFAULT_SERVER_IP, DEFAULT_BASE_PORT);
++}
++
++// Shutdown query system
++void NET_Query_Shutdown(void)
++{
++    for (int i = 0; i < num_servers; i++)
++    {
++        if (servers[i].addr != NULL)
++        {
++            NET_FreeAddress(servers[i].addr);
++            servers[i].addr = NULL;
++        }
++    }
++    num_servers = 0;
++    query_initialized = false;
++}
++
++// Add a server to the list
++boolean NET_Query_AddServer(const char *address)
++{
++    if (num_servers >= MAX_SERVERS)
++        return false;
++    
++    server_entry_t *server = &servers[num_servers];
++    memset(server, 0, sizeof(server_entry_t));
++    
++    strncpy(server->address, address, sizeof(server->address) - 1);
++    server->query_state = QUERY_STATE_IDLE;
++    server->has_response = false;
++    server->addr = NULL;
++    
++    // Parse port from address string (format: "ip:port")
++    const char *colon = strrchr(address, ':');
++    if (colon != NULL)
++    {
++        server->port = atoi(colon + 1);
++    }
++    
++    num_servers++;
++    return true;
++}
++
++// Compare function for sorting servers by port
++static int compare_servers_by_port(const void *a, const void *b)
++{
++    const server_entry_t *sa = (const server_entry_t *)a;
++    const server_entry_t *sb = (const server_entry_t *)b;
++    return sa->port - sb->port;
++}
++
++// Sort servers by port number
++void NET_Query_SortByPort(void)
++{
++    if (num_servers > 1)
++    {
++        qsort(servers, num_servers, sizeof(server_entry_t), compare_servers_by_port);
++        printf("NET_Query_SortByPort: Sorted %d servers by port\n", num_servers);
++    }
++}
++
++// Clear server list
++void NET_Query_ClearServers(void)
++{
++    for (int i = 0; i < num_servers; i++)
++    {
++        if (servers[i].addr != NULL)
++        {
++            NET_FreeAddress(servers[i].addr);
++            servers[i].addr = NULL;
++        }
++    }
++    num_servers = 0;
++}
++
++// Send a query packet to a server
++static void NET_Query_SendQueryPacket(server_entry_t *server)
++{
++    net_packet_t *packet;
++    
++    // Resolve address if needed
++    if (server->addr == NULL)
++    {
++        server->addr = net_socket_module.ResolveAddress(server->address);
++        if (server->addr == NULL)
++        {
++            fprintf(stderr, "NET_Query_SendQueryPacket: Failed to resolve %s\n", server->address);
++            server->query_state = QUERY_STATE_TIMEOUT;
++            return;
++        }
++    }
++    
++    packet = NET_NewPacket(16);
++    if (packet == NULL)
++        return;
++    
++    // Write query packet type
++    NET_WriteInt16(packet, NET_PACKET_TYPE_QUERY);
++    
++    // Send it
++    NET_SendPacket(server->addr, packet);
++    NET_FreePacket(packet);
++    
++    server->query_time = I_GetTimeMS();
++    server->query_state = QUERY_STATE_QUERYING;
++    server->query_attempts++;
++}
++
++// Parse a query response packet
++static boolean NET_Query_ParseResponse(net_packet_t *packet, server_entry_t *server)
++{
++    unsigned int packet_type;
++    char *str;
++    
++    // Read packet type
++    if (!NET_ReadInt16(packet, &packet_type))
++        return false;
++    
++    if (packet_type != NET_PACKET_TYPE_QUERY_RESPONSE)
++        return false;
++    
++    // Read version string
++    str = NET_ReadString(packet);
++    if (str == NULL)
++        return false;
++    strncpy(server->version, str, sizeof(server->version) - 1);
++    
++    // Read server state
++    if (!NET_ReadInt8(packet, (unsigned int *)&server->server_state))
++        return false;
++    
++    // Read num_players
++    if (!NET_ReadInt8(packet, (unsigned int *)&server->num_players))
++        return false;
++    
++    // Read max_players
++    if (!NET_ReadInt8(packet, (unsigned int *)&server->max_players))
++        return false;
++    
++    // Read gamemode
++    if (!NET_ReadInt8(packet, (unsigned int *)&server->gamemode))
++        return false;
++    
++    // Read gamemission
++    if (!NET_ReadInt8(packet, (unsigned int *)&server->gamemission))
++        return false;
++    
++    // Read description
++    str = NET_ReadString(packet);
++    if (str == NULL)
++        return false;
++    strncpy(server->description, str, sizeof(server->description) - 1);
++    
++    // Protocol list is optional, ignore if not present
++    
++    return true;
++}
++
++// Process incoming query responses
++static void NET_Query_ProcessResponses(void)
++{
++    net_addr_t *addr;
++    net_packet_t *packet;
++    char addr_str[128];
++    
++    while (NET_RecvPacket(query_context, &addr, &packet))
++    {
++        // Get address string for matching
++        addr->module->AddrToString(addr, addr_str, sizeof(addr_str));
++        
++        // Find matching server BY ADDRESS
++        for (int i = 0; i < num_servers; i++)
++        {
++            // Match by address string (must match the server we queried)
++            if (strcmp(servers[i].address, addr_str) == 0 &&
++                servers[i].query_state == QUERY_STATE_QUERYING)
++            {
++                // Try to parse response
++                if (NET_Query_ParseResponse(packet, &servers[i]))
++                {
++                    servers[i].has_response = true;
++                    servers[i].query_state = QUERY_STATE_RESPONDED;
++                    servers[i].ping_time = I_GetTimeMS() - servers[i].query_time;
++                    printf("Query response from %s: %s (%d/%d players, ping %dms)\n",
++                           servers[i].address,
++                           servers[i].description,
++                           servers[i].num_players,
++                           servers[i].max_players,
++                           servers[i].ping_time);
++                    break;
++                }
++            }
++        }
++        
++        NET_FreePacket(packet);
++        NET_FreeAddress(addr);
++    }
++}
++
++// Check for query timeouts and retries
++static void NET_Query_CheckTimeouts(void)
++{
++    unsigned int now = I_GetTimeMS();
++    
++    for (int i = 0; i < num_servers; i++)
++    {
++        if (servers[i].query_state == QUERY_STATE_QUERYING)
++        {
++            if (now - servers[i].query_time > QUERY_TIMEOUT_MS)
++            {
++                if (servers[i].query_attempts < QUERY_MAX_ATTEMPTS)
++                {
++                    // Retry
++                    printf("Query timeout for %s, retrying (%d/%d)\n",
++                           servers[i].address,
++                           servers[i].query_attempts + 1,
++                           QUERY_MAX_ATTEMPTS);
++                    NET_Query_SendQueryPacket(&servers[i]);
++                }
++                else
++                {
++                    // Give up
++                    servers[i].query_state = QUERY_STATE_TIMEOUT;
++                    printf("Query failed for %s (timeout)\n", servers[i].address);
++                }
++            }
++        }
++    }
++}
++
++// Start querying all servers
++void NET_Query_StartAll(void)
++{
++    if (!query_initialized)
++    {
++        if (!NET_Query_Init())
++            return;
++    }
++    
++    // If no servers in list, run discovery first
++    if (num_servers == 0)
++    {
++        printf("NET_Query_StartAll: No servers configured, running discovery...\n");
++        NET_Query_DiscoverDefaultServers();
++    }
++    
++    printf("NET_Query_StartAll: Querying %d servers...\n", num_servers);
++    
++    for (int i = 0; i < num_servers; i++)
++    {
++        servers[i].query_state = QUERY_STATE_IDLE;
++        servers[i].has_response = false;
++        servers[i].query_attempts = 0;
++        servers[i].ping_time = 0;
++        NET_Query_SendQueryPacket(&servers[i]);
++    }
++}
++
++// Poll for query results - returns true when all queries complete
++boolean NET_Query_Poll(void)
++{
++    if (!query_initialized)
++        return true;
++    
++    NET_Query_ProcessResponses();
++    NET_Query_CheckTimeouts();
++    
++    // Check if all queries are complete
++    for (int i = 0; i < num_servers; i++)
++    {
++        if (servers[i].query_state == QUERY_STATE_QUERYING)
++            return false;  // Still waiting
++    }
++    
++    return true;  // All complete
++}
++
++// Query all servers synchronously (blocking)
++void NET_Query_RunAll(void)
++{
++    unsigned int start_time;
++    
++    NET_Query_StartAll();
++    
++    start_time = I_GetTimeMS();
++    
++    // Wait for all responses (with global timeout)
++    while (!NET_Query_Poll())
++    {
++        if (I_GetTimeMS() - start_time > QUERY_TIMEOUT_MS * QUERY_MAX_ATTEMPTS + 500)
++        {
++            printf("NET_Query_RunAll: Global timeout\n");
++            break;
++        }
++        I_Sleep(10);
++    }
++    
++    printf("NET_Query_RunAll: Complete\n");
++}
++
++// Get number of servers
++int NET_Query_GetServerCount(void)
++{
++    return num_servers;
++}
++
++// Get server info by index
++boolean NET_Query_GetServerInfo(int index, net_querydata_t *data, 
++                                 char *address, int address_len,
++                                 unsigned int *ping)
++{
++    if (index < 0 || index >= num_servers)
++        return false;
++    
++    server_entry_t *server = &servers[index];
++    
++    if (!server->has_response)
++        return false;
++    
++    if (data != NULL)
++    {
++        data->version = server->version;
++        data->server_state = server->server_state;
++        data->num_players = server->num_players;
++        data->max_players = server->max_players;
++        data->gamemode = server->gamemode;
++        data->gamemission = server->gamemission;
++        data->description = server->description;
++    }
++    
++    if (address != NULL)
++    {
++        strncpy(address, server->address, address_len - 1);
++        address[address_len - 1] = '\0';
++    }
++    
++    if (ping != NULL)
++    {
++        *ping = server->ping_time;
++    }
++    
++    return true;
++}
++
++// Get raw server entry (for browser)
++server_entry_t *NET_Query_GetServerEntry(int index)
++{
++    if (index < 0 || index >= num_servers)
++        return NULL;
++    return &servers[index];
++}
++
++// Calculate matchmaking score for a server
++// Higher score = better match
++// Returns -1 if server should be skipped
++static int NET_Query_CalcScore(server_entry_t *server)
++{
++    // No response = skip
++    if (!server->has_response)
++        return -1;
++    
++    // In-game = skip
++    if (server->server_state != SERVER_STATE_WAITING)
++        return -1;
++    
++    // Full = skip
++    if (server->num_players >= server->max_players)
++        return -1;
++    
++    // Scoring:
++    // Prefer 1-2 players (ideal for quick game start)
++    // Then 0 players (empty server)
++    // Then 3+ players (nearly full)
++    
++    int score = 100;
++    
++    // Bonus for 1-2 players (someone waiting!)
++    if (server->num_players >= 1 && server->num_players <= 2)
++        score += 50;
++    
++    // Slight bonus for having any players
++    if (server->num_players > 0)
++        score += 10 * server->num_players;
++    
++    // Penalty for low ping (actually bonus for low ping)
++    if (server->ping_time < 50)
++        score += 30;
++    else if (server->ping_time < 100)
++        score += 20;
++    else if (server->ping_time < 200)
++        score += 10;
++    
++    // Penalty for nearly full
++    if (server->num_players >= server->max_players - 1)
++        score -= 20;
++    
++    return score;
++}
++
++// Find best server for auto-matchmaking
++// Returns server index, or -1 if no suitable server found
++int NET_Query_FindBestServer(void)
++{
++    int best_index = -1;
++    int best_score = -1;
++    
++    for (int i = 0; i < num_servers; i++)
++    {
++        int score = NET_Query_CalcScore(&servers[i]);
++        if (score > best_score)
++        {
++            best_score = score;
++            best_index = i;
++        }
++    }
++    
++    if (best_index >= 0)
++    {
++        printf("NET_Query_FindBestServer: Selected %s (score %d)\n",
++               servers[best_index].address, best_score);
++    }
++    else
++    {
++        printf("NET_Query_FindBestServer: No suitable server found\n");
++    }
++    
++    return best_index;
++}
++
++// Get address string for server index
++const char *NET_Query_GetServerAddress(int index)
++{
++    if (index < 0 || index >= num_servers)
++        return NULL;
++    return servers[index].address;
++}
++
++// Legacy stub functions for compatibility
++void NET_QueryAddress(char *addr)
++{
++    printf("NET_QueryAddress: %s\n", addr);
++    NET_Query_Init();
++    NET_Query_ClearServers();
++    NET_Query_AddServer(addr);
++    NET_Query_RunAll();
++}
++
++void NET_LANQuery(void)
++{
++    printf("NET_LANQuery: LAN broadcast not implemented\n");
++}
++
++void NET_MasterQuery(void)
++{
++    printf("NET_MasterQuery: Master server not implemented\n");
++}
++
+diff --git a/doomgeneric/net_query.h b/doomgeneric/net_query.h
+index 563a055..13691b9 100644
+--- a/doomgeneric/net_query.h
++++ b/doomgeneric/net_query.h
+@@ -1,44 +1,50 @@
+ //
+ // Copyright(C) 2005-2014 Simon Howard
++// Copyright(C) 2026 WiFi Pineapple Pager port
+ //
+-// This program is free software; you can redistribute it and/or
+-// modify it under the terms of the GNU General Public License
+-// as published by the Free Software Foundation; either version 2
+-// of the License, or (at your option) any later version.
+-//
+-// This program is distributed in the hope that it will be useful,
+-// but WITHOUT ANY WARRANTY; without even the implied warranty of
+-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+-// GNU General Public License for more details.
+-//
+-// DESCRIPTION:
+-//     Querying servers to find their current status.
++// Server query and lobby browser functions
+ //
+ 
+ #ifndef NET_QUERY_H
+ #define NET_QUERY_H
+ 
++#include "doomtype.h"
+ #include "net_defs.h"
+ 
+-typedef void (*net_query_callback_t)(net_addr_t *addr,
+-                                     net_querydata_t *querydata,
+-                                     unsigned int ping_time,
+-                                     void *user_data);
++// Default server configuration
++#define DEFAULT_SERVER_IP "64.227.99.100"
++#define DEFAULT_BASE_PORT 2342
+ 
+-extern int NET_StartLANQuery(void);
+-extern int NET_StartMasterQuery(void);
++// Initialize/shutdown query system
++boolean NET_Query_Init(void);
++void NET_Query_Shutdown(void);
+ 
+-extern void NET_LANQuery(void);
+-extern void NET_MasterQuery(void);
+-extern void NET_QueryAddress(char *addr);
+-extern net_addr_t *NET_FindLANServer(void);
++// Server list management
++boolean NET_Query_AddServer(const char *address);
++void NET_Query_ClearServers(void);
++int NET_Query_GetServerCount(void);
+ 
+-extern int NET_Query_Poll(net_query_callback_t callback, void *user_data);
++// Server discovery (scans sequential ports to find active servers)
++void NET_Query_DiscoverServers(const char *server_ip, int base_port);
++void NET_Query_DiscoverDefaultServers(void);
+ 
+-extern net_addr_t *NET_Query_ResolveMaster(net_context_t *context);
+-extern void NET_Query_AddToMaster(net_addr_t *master_addr);
+-extern boolean NET_Query_CheckAddedToMaster(boolean *result);
+-extern void NET_Query_MasterResponse(net_packet_t *packet);
++// Query operations
++void NET_Query_StartAll(void);      // Start async query of all servers
++boolean NET_Query_Poll(void);       // Poll for responses, returns true when complete
++void NET_Query_RunAll(void);        // Blocking query of all servers
+ 
+-#endif /* #ifndef NET_QUERY_H */
++// Get server info
++boolean NET_Query_GetServerInfo(int index, net_querydata_t *data,
++                                 char *address, int address_len,
++                                 unsigned int *ping);
++const char *NET_Query_GetServerAddress(int index);
+ 
++// Auto-matchmaking
++int NET_Query_FindBestServer(void);  // Returns index of best server, -1 if none
++
++// Legacy compatibility stubs
++void NET_QueryAddress(char *addr);
++void NET_LANQuery(void);
++void NET_MasterQuery(void);
++
++#endif /* #ifndef NET_QUERY_H */
+diff --git a/doomgeneric/net_server.c b/doomgeneric/net_server.c
+new file mode 100644
+index 0000000..4a23397
+--- /dev/null
++++ b/doomgeneric/net_server.c
+@@ -0,0 +1,54 @@
++//
++// Copyright(C) 2005-2014 Simon Howard
++// Copyright(C) 2026 WiFi Pineapple Pager port
++//
++// Network server code - minimal implementation for client-only mode
++//
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "doomtype.h"
++#include "net_defs.h"
++#include "net_server.h"
++
++static net_module_t *server_modules[16];
++static int num_server_modules = 0;
++static boolean server_initialized = false;
++
++void NET_SV_Init(void)
++{
++    if (server_initialized)
++        return;
++
++    printf("NET_SV_Init: Server mode not fully implemented\n");
++    server_initialized = true;
++}
++
++void NET_SV_Run(void)
++{
++    // Server tick - not implemented for client-only mode
++}
++
++void NET_SV_Shutdown(void)
++{
++    server_initialized = false;
++}
++
++void NET_SV_AddModule(net_module_t *module)
++{
++    if (num_server_modules >= 16)
++        return;
++
++    server_modules[num_server_modules++] = module;
++}
++
++void NET_SV_RegisterWithMaster(void)
++{
++    // Master server registration - not implemented
++    printf("NET_SV_RegisterWithMaster: Not implemented\n");
++}
++
++
++
+diff --git a/doomgeneric/net_socket.c b/doomgeneric/net_socket.c
+new file mode 100644
+index 0000000..3996b8d
+--- /dev/null
++++ b/doomgeneric/net_socket.c
+@@ -0,0 +1,297 @@
++//
++// Copyright(C) 2026 WiFi Pineapple Pager port
++//
++// POSIX socket-based network module (replaces SDL_net)
++//
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <errno.h>
++#include <fcntl.h>
++#include <sys/types.h>
++#include <sys/socket.h>
++#include <netinet/in.h>
++#include <arpa/inet.h>
++#include <netdb.h>
++
++#include "doomtype.h"
++#include "net_defs.h"
++#include "net_packet.h"
++#include "net_socket.h"
++
++#define DEFAULT_PORT 2342  // Chocolate Doom default port
++
++// Socket address wrapper
++typedef struct
++{
++    struct sockaddr_in addr;
++    int refcount;
++} socket_addr_t;
++
++static int client_socket = -1;
++static int server_socket = -1;
++
++// Set socket to non-blocking mode
++static boolean SetNonBlocking(int sock)
++{
++    int flags = fcntl(sock, F_GETFL, 0);
++    if (flags < 0)
++        return false;
++    return fcntl(sock, F_SETFL, flags | O_NONBLOCK) >= 0;
++}
++
++static boolean NET_Socket_InitClient(void)
++{
++    client_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
++    if (client_socket < 0)
++    {
++        fprintf(stderr, "NET_Socket_InitClient: Failed to create socket\n");
++        return false;
++    }
++
++    if (!SetNonBlocking(client_socket))
++    {
++        fprintf(stderr, "NET_Socket_InitClient: Failed to set non-blocking\n");
++        close(client_socket);
++        client_socket = -1;
++        return false;
++    }
++
++    return true;
++}
++
++static boolean NET_Socket_InitServer(void)
++{
++    struct sockaddr_in addr;
++
++    server_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
++    if (server_socket < 0)
++    {
++        fprintf(stderr, "NET_Socket_InitServer: Failed to create socket\n");
++        return false;
++    }
++
++    // Allow address reuse
++    int opt = 1;
++    setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
++
++    memset(&addr, 0, sizeof(addr));
++    addr.sin_family = AF_INET;
++    addr.sin_addr.s_addr = INADDR_ANY;
++    addr.sin_port = htons(DEFAULT_PORT);
++
++    if (bind(server_socket, (struct sockaddr *)&addr, sizeof(addr)) < 0)
++    {
++        fprintf(stderr, "NET_Socket_InitServer: Failed to bind to port %d\n", DEFAULT_PORT);
++        close(server_socket);
++        server_socket = -1;
++        return false;
++    }
++
++    if (!SetNonBlocking(server_socket))
++    {
++        fprintf(stderr, "NET_Socket_InitServer: Failed to set non-blocking\n");
++        close(server_socket);
++        server_socket = -1;
++        return false;
++    }
++
++    return true;
++}
++
++static void NET_Socket_SendPacket(net_addr_t *addr, net_packet_t *packet)
++{
++    socket_addr_t *sockaddr;
++    int sock;
++    ssize_t result;
++
++    sockaddr = (socket_addr_t *)addr->handle;
++
++    // Use server socket if available, otherwise client socket
++    sock = (server_socket >= 0) ? server_socket : client_socket;
++    if (sock < 0)
++    {
++        fprintf(stderr, "NET_Socket_SendPacket: No socket available\n");
++        return;
++    }
++
++    result = sendto(sock, packet->data, packet->len, 0,
++           (struct sockaddr *)&sockaddr->addr, sizeof(sockaddr->addr));
++    
++    (void)result;  // Suppress unused warning - logging removed for performance
++}
++
++static boolean NET_Socket_RecvPacket(net_addr_t **addr, net_packet_t **packet)
++{
++    struct sockaddr_in from_addr;
++    socklen_t from_len = sizeof(from_addr);
++    ssize_t len;
++    int sock;
++    byte buffer[2048];
++    socket_addr_t *sockaddr;
++    net_addr_t *netaddr;
++
++    // Use server socket if available, otherwise client socket
++    sock = (server_socket >= 0) ? server_socket : client_socket;
++    if (sock < 0)
++    {
++        // No socket - single-player mode, silently return
++        return false;
++    }
++
++    len = recvfrom(sock, buffer, sizeof(buffer), 0,
++                   (struct sockaddr *)&from_addr, &from_len);
++
++    if (len < 0)
++    {
++        // No data available (would block)
++        if (errno == EAGAIN || errno == EWOULDBLOCK)
++            return false;
++        fprintf(stderr, "NET_Socket_RecvPacket: recvfrom error: %s\n", strerror(errno));
++        return false;
++    }
++
++    if (len == 0)
++        return false;
++
++    // Create packet
++    *packet = NET_NewPacket(len);
++    if (*packet == NULL)
++        return false;
++
++    memcpy((*packet)->data, buffer, len);
++    (*packet)->len = len;
++
++    // Create address
++    sockaddr = malloc(sizeof(socket_addr_t));
++    if (sockaddr == NULL)
++    {
++        NET_FreePacket(*packet);
++        return false;
++    }
++
++    memcpy(&sockaddr->addr, &from_addr, sizeof(from_addr));
++    sockaddr->refcount = 1;
++
++    netaddr = malloc(sizeof(net_addr_t));
++    if (netaddr == NULL)
++    {
++        free(sockaddr);
++        NET_FreePacket(*packet);
++        return false;
++    }
++
++    netaddr->module = &net_socket_module;
++    netaddr->handle = sockaddr;
++    *addr = netaddr;
++
++    return true;
++}
++
++static void NET_Socket_AddrToString(net_addr_t *addr, char *buffer, int buffer_len)
++{
++    socket_addr_t *sockaddr = (socket_addr_t *)addr->handle;
++
++    snprintf(buffer, buffer_len, "%s:%d",
++             inet_ntoa(sockaddr->addr.sin_addr),
++             ntohs(sockaddr->addr.sin_port));
++}
++
++static void NET_Socket_FreeAddress(net_addr_t *addr)
++{
++    socket_addr_t *sockaddr = (socket_addr_t *)addr->handle;
++
++    sockaddr->refcount--;
++    if (sockaddr->refcount <= 0)
++    {
++        free(sockaddr);
++    }
++    free(addr);
++}
++
++static net_addr_t *NET_Socket_ResolveAddress(char *address)
++{
++    socket_addr_t *sockaddr;
++    net_addr_t *netaddr;
++    struct hostent *host;
++    char *addr_str;
++    char *port_str;
++    char addr_copy[256];
++    int port = DEFAULT_PORT;
++
++    // Parse address:port
++    strncpy(addr_copy, address, sizeof(addr_copy) - 1);
++    addr_copy[sizeof(addr_copy) - 1] = '\0';
++
++    addr_str = addr_copy;
++    port_str = strchr(addr_copy, ':');
++    if (port_str != NULL)
++    {
++        *port_str = '\0';
++        port_str++;
++        port = atoi(port_str);
++    }
++
++    sockaddr = malloc(sizeof(socket_addr_t));
++    if (sockaddr == NULL)
++        return NULL;
++
++    memset(&sockaddr->addr, 0, sizeof(sockaddr->addr));
++    sockaddr->addr.sin_family = AF_INET;
++    sockaddr->addr.sin_port = htons(port);
++    sockaddr->refcount = 1;
++
++    // Try as IP address first
++    if (inet_aton(addr_str, &sockaddr->addr.sin_addr) == 0)
++    {
++        // Try DNS lookup
++        host = gethostbyname(addr_str);
++        if (host == NULL)
++        {
++            fprintf(stderr, "NET_Socket_ResolveAddress: Failed to resolve '%s'\n", addr_str);
++            free(sockaddr);
++            return NULL;
++        }
++        memcpy(&sockaddr->addr.sin_addr, host->h_addr_list[0], host->h_length);
++    }
++
++    netaddr = malloc(sizeof(net_addr_t));
++    if (netaddr == NULL)
++    {
++        free(sockaddr);
++        return NULL;
++    }
++
++    netaddr->module = &net_socket_module;
++    netaddr->handle = sockaddr;
++
++    return netaddr;
++}
++
++void NET_Socket_Shutdown(void)
++{
++    if (client_socket >= 0)
++    {
++        close(client_socket);
++        client_socket = -1;
++    }
++    if (server_socket >= 0)
++    {
++        close(server_socket);
++        server_socket = -1;
++    }
++}
++
++net_module_t net_socket_module =
++{
++    NET_Socket_InitClient,
++    NET_Socket_InitServer,
++    NET_Socket_SendPacket,
++    NET_Socket_RecvPacket,
++    NET_Socket_AddrToString,
++    NET_Socket_FreeAddress,
++    NET_Socket_ResolveAddress,
++};
++
+diff --git a/doomgeneric/net_socket.h b/doomgeneric/net_socket.h
+new file mode 100644
+index 0000000..69979b1
+--- /dev/null
++++ b/doomgeneric/net_socket.h
+@@ -0,0 +1,19 @@
++//
++// Copyright(C) 2026 WiFi Pineapple Pager port
++//
++// POSIX socket-based network module
++//
++
++#ifndef NET_SOCKET_H
++#define NET_SOCKET_H
++
++#include "net_defs.h"
++
++extern net_module_t net_socket_module;
++
++void NET_Socket_Shutdown(void);
++
++#endif /* #ifndef NET_SOCKET_H */
++
++
++
+diff --git a/doomgeneric/p_enemy.c b/doomgeneric/p_enemy.c
+index f2b44d1..25a06cc 100644
+--- a/doomgeneric/p_enemy.c
++++ b/doomgeneric/p_enemy.c
+@@ -654,10 +654,72 @@ void A_Look (mobj_t* actor)
+ // Actor has a melee attack,
+ // so it tries to close as fast as possible
+ //
++// PAGER OPTIMIZATION: Distance-based AI throttling
++//
++// Two modes available:
++//
++// AI_THROTTLE_SIMPLE (FastDoom-style):
++//   Enemies >1024 units (~32 map units) think every 2nd tic
++//   Simple, minimal overhead, good for most cases
++//
++// AI_THROTTLE_TIERED (Custom 3-tier):
++//   Near (<32 units): every tic
++//   Mid (32-64 units): every 2nd tic  
++//   Far (>128 units): every 4th tic
++//   More aggressive, better for crowded maps
++//
++// Source: FastDoom AI optimization
++// Expected gain: 10-15% game logic reduction
++//
++// Compile with: -DAI_THROTTLE_SIMPLE or -DAI_THROTTLE_TIERED
++//
++#ifdef AI_THROTTLE_TIERED
++#define AI_THROTTLE_DIST_MID    (2048 << FRACBITS)  // ~64 map units
++#define AI_THROTTLE_DIST_FAR    (4096 << FRACBITS)  // ~128 map units
++#endif
++
+ void A_Chase (mobj_t*	actor)
+ {
+     int		delta;
+ 
++#ifdef AI_THROTTLE_SIMPLE
++    // FastDoom-style: simple distance check
++    // Enemies >1024 units away think every 2nd tic
++    if (actor->target && players[0].mo)
++    {
++        fixed_t dist = P_AproxDistance(actor->x - players[0].mo->x,
++                                       actor->y - players[0].mo->y);
++        if (dist > (1024 << FRACBITS) && (leveltime & 1))
++            return;
++    }
++#endif
++
++#ifdef AI_THROTTLE_TIERED
++    // 3-tier distance-based AI throttling
++    if (actor->target && players[0].mo)
++    {
++        fixed_t dist = P_AproxDistance(actor->x - players[0].mo->x,
++                                       actor->y - players[0].mo->y);
++        
++        // Use actor pointer as pseudo-random offset
++        int actor_offset = ((size_t)actor >> 4) & 0x3;
++        
++        if (dist > AI_THROTTLE_DIST_FAR)
++        {
++            // Very far: think every 4th tic
++            if (((leveltime + actor_offset) & 3) != 0)
++                return;
++        }
++        else if (dist > AI_THROTTLE_DIST_MID)
++        {
++            // Medium distance: think every 2nd tic
++            if (((leveltime + actor_offset) & 1) != 0)
++                return;
++        }
++        // Near enemies: always think
++    }
++#endif
++
+     if (actor->reactiontime)
+ 	actor->reactiontime--;
+ 				
+diff --git a/doomgeneric/p_mobj.h b/doomgeneric/p_mobj.h
+index 90ed764..fb5efb2 100644
+--- a/doomgeneric/p_mobj.h
++++ b/doomgeneric/p_mobj.h
+@@ -198,87 +198,113 @@ typedef enum
+ 
+ 
+ // Map Object definition.
++//
++// PAGER OPTIMIZATION: Cache-optimized field ordering
++//
++// When MOBJ_CACHE_OPTIMIZE is defined (default), hot fields are grouped
++// in first 3 cache lines (~96 bytes) to minimize cache misses.
++//
++// When MOBJ_ORIGINAL_LAYOUT is defined, use vanilla Doom field order
++// for A/B benchmarking comparison.
++//
++// MIPS 24KEc: 32KB L1 D-cache, 32-byte lines, no L2
++// Every L1 miss goes to main memory (~100+ cycles)
++//
++// Compile with: -DMOBJ_ORIGINAL_LAYOUT to disable optimization
++//
++#ifdef MOBJ_ORIGINAL_LAYOUT
++
++// ORIGINAL vanilla Doom field order (for A/B testing)
++// Hot fields scattered across 7 cache lines = many cache misses
+ typedef struct mobj_s
+ {
+-    // List: thinker links.
+-    thinker_t		thinker;
++    thinker_t       thinker;        // Thinker links (MUST be first)
++    fixed_t         x, y, z;        // Position
++    struct mobj_s*  snext;          // Sector links
++    struct mobj_s*  sprev;
++    angle_t         angle;          // Orientation
++    spritenum_t     sprite;         // Rendering
++    int             frame;
++    struct mobj_s*  bnext;          // Block links
++    struct mobj_s*  bprev;
++    struct subsector_s* subsector;
++    fixed_t         floorz;         // Movement bounds
++    fixed_t         ceilingz;
++    fixed_t         radius;         // Collision
++    fixed_t         height;
++    fixed_t         momx, momy, momz; // Momentum
++    int             validcount;
++    mobjtype_t      type;
++    mobjinfo_t*     info;
++    int             tics;           // Animation
++    state_t*        state;
++    int             flags;
++    int             health;
++    int             movedir;        // AI
++    int             movecount;
++    struct mobj_s*  target;
++    int             reactiontime;
++    int             threshold;
++    struct player_s* player;
++    int             lastlook;
++    mapthing_t      spawnpoint;
++    struct mobj_s*  tracer;
++} mobj_t;
+ 
+-    // Info for drawing: position.
+-    fixed_t		x;
++#else
++
++// CACHE OPTIMIZED LAYOUT for MIPS 24KEc (32-byte cache lines)
++// Hot fields grouped in first 3 cache lines (~96 bytes)
++typedef struct mobj_s
++{
++    // === CACHE LINE 0 (bytes 0-31): Core position & state ===
++    // thinker MUST be first - code casts thinker_t* to mobj_t*
++    thinker_t		thinker;	// 12 bytes: linked list for P_RunThinkers
++    fixed_t		x;		// Position - accessed in collision, rendering, AI
+     fixed_t		y;
+     fixed_t		z;
++    int			flags;		// Checked in almost every function
++    int			tics;		// Animation counter - checked every frame
+ 
+-    // More list: links in sector (if needed)
++    // === CACHE LINE 1 (bytes 32-63): Animation, movement, collision ===
++    state_t*		state;		// Animation state
++    mobjinfo_t*		info;		// Object type info (stats, AI params)
++    fixed_t		momx;		// Momentum - movement every tick
++    fixed_t		momy;
++    fixed_t		momz;
++    fixed_t		radius;		// Collision bounds - checked constantly
++    fixed_t		height;
++    angle_t		angle;		// Rendering orientation
++
++    // === CACHE LINE 2 (bytes 64-95): Rendering, AI, type ===
++    spritenum_t		sprite;		// Rendering
++    int			frame;		// Rendering (might be ORed with FF_FULLBRIGHT)
++    int			health;		// Combat
++    struct mobj_s*	target;		// AI target / missile originator
++    int			validcount;	// Iteration guard
++    mobjtype_t		type;		// Object type enum
++    int			movedir;	// AI movement direction (0-7)
++    int			movecount;	// AI movement counter
++
++    // === CACHE LINE 3+ (bytes 96+): Less frequently accessed ===
++    fixed_t		floorz;
++    fixed_t		ceilingz;
++    struct subsector_s*	subsector;
+     struct mobj_s*	snext;
+     struct mobj_s*	sprev;
+-
+-    //More drawing info: to determine current sprite.
+-    angle_t		angle;	// orientation
+-    spritenum_t		sprite;	// used to find patch_t and flip value
+-    int			frame;	// might be ORed with FF_FULLBRIGHT
+-
+-    // Interaction info, by BLOCKMAP.
+-    // Links in blocks (if needed).
+     struct mobj_s*	bnext;
+     struct mobj_s*	bprev;
+-    
+-    struct subsector_s*	subsector;
+-
+-    // The closest interval over all contacted Sectors.
+-    fixed_t		floorz;
+-    fixed_t		ceilingz;
+-
+-    // For movement checking.
+-    fixed_t		radius;
+-    fixed_t		height;	
+-
+-    // Momentums, used to update position.
+-    fixed_t		momx;
+-    fixed_t		momy;
+-    fixed_t		momz;
+-
+-    // If == validcount, already checked.
+-    int			validcount;
+-
+-    mobjtype_t		type;
+-    mobjinfo_t*		info;	// &mobjinfo[mobj->type]
+-    
+-    int			tics;	// state tic counter
+-    state_t*		state;
+-    int			flags;
+-    int			health;
+-
+-    // Movement direction, movement generation (zig-zagging).
+-    int			movedir;	// 0-7
+-    int			movecount;	// when 0, select a new dir
+-
+-    // Thing being chased/attacked (or NULL),
+-    // also the originator for missiles.
+-    struct mobj_s*	target;
+-
+-    // Reaction time: if non 0, don't attack yet.
+-    // Used by player to freeze a bit after teleporting.
+-    int			reactiontime;   
+-
+-    // If >0, the target will be chased
+-    // no matter what (even if shot)
++    int			reactiontime;
+     int			threshold;
+-
+-    // Additional info record for player avatars only.
+-    // Only valid if type == MT_PLAYER
+     struct player_s*	player;
+-
+-    // Player number last looked for.
+-    int			lastlook;	
+-
+-    // For nightmare respawn.
+-    mapthing_t		spawnpoint;	
+-
+-    // Thing being chased/attacked for tracers.
+-    struct mobj_s*	tracer;	
++    int			lastlook;
++    mapthing_t		spawnpoint;
++    struct mobj_s*	tracer;
+     
+ } mobj_t;
+ 
++#endif // MOBJ_ORIGINAL_LAYOUT
++
+ 
+ 
+ #endif
+diff --git a/doomgeneric/p_tick.c b/doomgeneric/p_tick.c
+index 2289350..f232b76 100644
+--- a/doomgeneric/p_tick.c
++++ b/doomgeneric/p_tick.c
+@@ -91,13 +91,49 @@ void P_AllocateThinker (thinker_t*	thinker)
+ //
+ // P_RunThinkers
+ //
++// PAGER OPTIMIZATION: Prefetch next thinker(s) while processing current one.
++//
++// When THINKER_PREFETCH_ENABLED is defined, we prefetch the next thinkers
++// in the linked list to hide memory latency.
++//
++// The thinker list is a linked list scattered in heap memory. Each ->next
++// dereference is a potential cache miss (~100+ cycles on MIPS 24KEc).
++// By prefetching 2 thinkers ahead, we hide memory latency.
++//
++// Prefetch strategy:
++// - Prefetch next->next to hide L1 miss latency
++// - Each thinker is at least sizeof(thinker_t) but usually mobj_t (~200 bytes)
++// - MIPS 24KEc has 32KB L1 D-cache with 32-byte lines
++//
++// Source: Cache optimization analysis (perf/CACHE_OPTIMIZATION.md)
++// Expected gain: 5-10% game logic reduction
++//
++// Compile with: -DTHINKER_PREFETCH_ENABLED
++//
+ void P_RunThinkers (void)
+ {
+     thinker_t*	currentthinker;
++#ifdef THINKER_PREFETCH_ENABLED
++    thinker_t*	nextthinker;
++#endif
+ 
+     currentthinker = thinkercap.next;
+     while (currentthinker != &thinkercap)
+     {
++#ifdef THINKER_PREFETCH_ENABLED
++	// Save next pointer before potential Z_Free
++	nextthinker = currentthinker->next;
++	
++	// Prefetch 2 thinkers ahead to hide memory latency
++	// Level 0 = no temporal locality (won't be reused soon)
++	if (nextthinker != &thinkercap) {
++	    __builtin_prefetch(nextthinker, 0, 0);
++	    if (nextthinker->next != &thinkercap) {
++		__builtin_prefetch(nextthinker->next, 0, 0);
++	    }
++	}
++#endif
++
+ 	if ( currentthinker->function.acv == (actionf_v)(-1) )
+ 	{
+ 	    // time to remove it
+@@ -110,7 +146,11 @@ void P_RunThinkers (void)
+ 	    if (currentthinker->function.acp1)
+ 		currentthinker->function.acp1 (currentthinker);
+ 	}
++#ifdef THINKER_PREFETCH_ENABLED
++	currentthinker = nextthinker;
++#else
+ 	currentthinker = currentthinker->next;
++#endif
+     }
+ }
+ 
+diff --git a/doomgeneric/pager_optimizations.h b/doomgeneric/pager_optimizations.h
+new file mode 100644
+index 0000000..112c3d1
+--- /dev/null
++++ b/doomgeneric/pager_optimizations.h
+@@ -0,0 +1,141 @@
++// pager_optimizations.h
++// WiFi Pineapple Pager DOOM Optimizations
++//
++// Compile-time flags to enable/disable individual optimizations.
++// Use -D flags when building to enable specific optimizations.
++//
++// Based on research from:
++// - FastDoom (DOS optimization techniques)
++// - RP2040-doom (embedded rendering)
++// - embeddedDOOM (memory reduction)
++// - Our own benchmarking (see perf/PROMPT.md)
++
++#ifndef PAGER_OPTIMIZATIONS_H
++#define PAGER_OPTIMIZATIONS_H
++
++// ============================================
++// OPTIMIZATION FLAGS
++// ============================================
++
++// INLINE_FIXED_MATH: Inline FixedMul/FixedDiv
++// Eliminates function call overhead on 165+ call sites
++// Source: FastDoom, GZDoom
++// Expected gain: 5-10% in hot paths
++#ifdef INLINE_FIXED_MATH
++#define USE_INLINE_FIXED 1
++#else
++#define USE_INLINE_FIXED 0
++#endif
++
++// AI_THROTTLE_ENABLED: Distance-based AI throttling
++// Reduces think frequency for distant enemies
++// Source: Custom optimization for embedded systems
++// Expected gain: 10-15% game logic
++#ifdef AI_THROTTLE_ENABLED
++#define USE_AI_THROTTLE 1
++#else
++#define USE_AI_THROTTLE 0
++#endif
++
++// THINKER_PREFETCH_ENABLED: Prefetch in P_RunThinkers
++// Prefetch next 2 thinkers to hide memory latency
++// Source: Cache optimization analysis
++// Expected gain: 5-10% game logic
++#ifdef THINKER_PREFETCH_ENABLED
++#define USE_THINKER_PREFETCH 1
++#else
++#define USE_THINKER_PREFETCH 0
++#endif
++
++// DOUBLE_BUFFER_ENABLED: Double buffering for display
++// Render to back buffer while front transfers via SPI
++// Source: RP2040-doom, nRF52840-doom
++// Expected gain: Overlap CPU work with I/O
++#ifdef DOUBLE_BUFFER_ENABLED
++#define USE_DOUBLE_BUFFER 1
++#else
++#define USE_DOUBLE_BUFFER 0
++#endif
++
++// ADAPTIVE_VISPLANES: Dynamic visplane limits
++// Start at 128 (vanilla), expand to 768 as needed
++// Source: Custom for SIGIL compatibility
++// Expected gain: Prevents crashes on complex maps
++#ifdef ADAPTIVE_VISPLANES
++#define USE_ADAPTIVE_VISPLANES 1
++#else
++#define USE_ADAPTIVE_VISPLANES 0
++#endif
++
++// RENDER_PREFETCH_ENABLED: Prefetch in render scaling loop
++// Prefetch source pixels during framebuffer scaling
++// Expected gain: Better cache utilization
++#ifdef RENDER_PREFETCH_ENABLED
++#define USE_RENDER_PREFETCH 1
++#else
++#define USE_RENDER_PREFETCH 0
++#endif
++
++// ============================================
++// AI THROTTLING PARAMETERS
++// ============================================
++
++#if USE_AI_THROTTLE
++// Distance thresholds in fixed-point units
++// 1024 fracunits = 32 map units
++#define AI_THROTTLE_DIST_NEAR   (1024 << FRACBITS)  // Always think
++#define AI_THROTTLE_DIST_MID    (2048 << FRACBITS)  // Think every 2 tics
++#define AI_THROTTLE_DIST_FAR    (4096 << FRACBITS)  // Think every 4 tics
++#endif
++
++// ============================================
++// VISPLANE PARAMETERS
++// ============================================
++
++#if USE_ADAPTIVE_VISPLANES
++#define MAXVISPLANES_POOL       768
++#define MAXVISPLANES_DEFAULT    128
++#define MAXVISPLANES_STEP1      256
++#define MAXVISPLANES_STEP2      512
++#define MAXVISPLANES_STEP3      768
++#define VISPLANE_EXPAND_THRESHOLD 0.9
++#define VISPLANE_MERGE_THRESHOLD  8
++#else
++#define MAXVISPLANES            512  // Increased from 128 for SIGIL
++#endif
++
++// ============================================
++// RUNTIME DETECTION
++// ============================================
++
++// Print which optimizations are compiled in
++static inline void PrintOptimizations(void) {
++    printf("Pager optimizations:\n");
++#if USE_INLINE_FIXED
++    printf("  [x] Inline fixed-point math\n");
++#else
++    printf("  [ ] Inline fixed-point math\n");
++#endif
++#if USE_AI_THROTTLE
++    printf("  [x] AI throttling\n");
++#else
++    printf("  [ ] AI throttling\n");
++#endif
++#if USE_THINKER_PREFETCH
++    printf("  [x] Thinker prefetch\n");
++#else
++    printf("  [ ] Thinker prefetch\n");
++#endif
++#if USE_DOUBLE_BUFFER
++    printf("  [x] Double buffering\n");
++#else
++    printf("  [ ] Double buffering\n");
++#endif
++#if USE_ADAPTIVE_VISPLANES
++    printf("  [x] Adaptive visplanes\n");
++#else
++    printf("  [ ] Adaptive visplanes\n");
++#endif
++}
++
++#endif // PAGER_OPTIMIZATIONS_H
 diff --git a/doomgeneric/qemu-gcc-wrapper.sh b/doomgeneric/qemu-gcc-wrapper.sh
 new file mode 100755
 index 0000000..d1c4fe1
@@ -560,35 +5719,542 @@ index 0000000..d1c4fe1
 +# Use QEMU to run the x86-64 compiler binary directly with proper library paths
 +exec qemu-x86_64 -L "$HOST_DIR" -E LD_LIBRARY_PATH="$HOST_DIR/lib" "$TOOLCHAIN_DIR/bin/.mipsel-openwrt-linux-musl-gcc.bin" "$@"
 +
-diff --git a/doomgeneric/doomdef.h b/doomgeneric/doomdef.h
-index 2d1a6c5..a3b2f91 100644
---- a/doomgeneric/doomdef.h
-+++ b/doomgeneric/doomdef.h
-@@ -38,7 +38,8 @@
-
- // If rangecheck is undefined,
- // most parameter validation debugging code will not be compiled
--#define RANGECHECK
-+// Disabled for BFG Edition compatibility (560px wide title screens)
-+// #define RANGECHECK
-
- // The maximum number of players, multiplayer/networking.
- #define MAXPLAYERS 4
-
+diff --git a/doomgeneric/r_bsp.c b/doomgeneric/r_bsp.c
+index 9a78812..2608601 100644
+--- a/doomgeneric/r_bsp.c
++++ b/doomgeneric/r_bsp.c
+@@ -43,7 +43,11 @@ line_t*		linedef;
+ sector_t*	frontsector;
+ sector_t*	backsector;
+ 
++#ifdef CACHE_ALIGN_ARRAYS
++drawseg_t	drawsegs[MAXDRAWSEGS] __attribute__((aligned(32)));
++#else
+ drawseg_t	drawsegs[MAXDRAWSEGS];
++#endif
+ drawseg_t*	ds_p;
+ 
+ 
+diff --git a/doomgeneric/r_defs.h b/doomgeneric/r_defs.h
+index a64ac84..d139683 100644
+--- a/doomgeneric/r_defs.h
++++ b/doomgeneric/r_defs.h
+@@ -48,7 +48,7 @@
+ #define SIL_TOP			2
+ #define SIL_BOTH		3
+ 
+-#define MAXDRAWSEGS		256
++#define MAXDRAWSEGS		512  // Increased from 256 for complex maps
+ 
+ 
+ 
+diff --git a/doomgeneric/r_draw.c b/doomgeneric/r_draw.c
+index 9271bcd..4efd173 100644
+--- a/doomgeneric/r_draw.c
++++ b/doomgeneric/r_draw.c
+@@ -99,6 +99,12 @@ int			dccount;
+ // Thus a special case loop for very fast rendering can
+ //  be used. It has also been used with Wolfenstein 3D.
+ // 
++//
++// PAGER OPTIMIZATION: Column prefetch
++// Prefetch texture data ahead in the inner loop to hide memory latency.
++// The texture is accessed via dc_source with frac as index.
++// Compile with: -DCOLUMN_PREFETCH_ENABLED
++//
+ void R_DrawColumn (void) 
+ { 
+     int			count; 
+@@ -129,11 +135,21 @@ void R_DrawColumn (void)
+     fracstep = dc_iscale; 
+     frac = dc_texturemid + (dc_yl-centery)*fracstep; 
+ 
++#ifdef COLUMN_PREFETCH_ENABLED
++    // Prefetch first texture access
++    __builtin_prefetch(&dc_source[(frac>>FRACBITS)&127], 0, 1);
++#endif
++
+     // Inner loop that does the actual texture mapping,
+     //  e.g. a DDA-lile scaling.
+     // This is as fast as it gets.
+     do 
+     {
++#ifdef COLUMN_PREFETCH_ENABLED
++	// Prefetch 8 pixels ahead in texture
++	if (count > 8)
++	    __builtin_prefetch(&dc_source[((frac + (fracstep << 3))>>FRACBITS)&127], 0, 1);
++#endif
+ 	// Re-map color indices from wall texture column
+ 	//  using a lighting/special effects LUT.
+ 	*dest = dc_colormap[dc_source[(frac>>FRACBITS)&127]];
+diff --git a/doomgeneric/r_plane.c b/doomgeneric/r_plane.c
+index ea1611c..7a2d0d9 100644
+--- a/doomgeneric/r_plane.c
++++ b/doomgeneric/r_plane.c
+@@ -41,9 +41,44 @@ planefunction_t		ceilingfunc;
+ // opening
+ //
+ 
+-// Here comes the obnoxious "visplane".
+-#define MAXVISPLANES	128
++//
++// PAGER OPTIMIZATION: Adaptive visplane limits
++//
++// When ADAPTIVE_VISPLANES is defined, we start at the vanilla Doom limit (128)
++// and automatically expand when needed, up to 768. This prevents crashes on
++// complex maps like SIGIL while maintaining vanilla behavior on simple maps.
++//
++// Without this flag, we use a fixed 512 limit (increased from vanilla 128).
++//
++// Source: Custom optimization for SIGIL compatibility
++// Expected gain: Crash prevention on complex maps
++//
++// Compile with: -DADAPTIVE_VISPLANES
++//
++#ifdef ADAPTIVE_VISPLANES
++
++#define MAXVISPLANES_POOL       768   // Static allocation size
++#define MAXVISPLANES_DEFAULT    128   // Start at vanilla Doom limit
++#define MAXVISPLANES_STEP1      256
++#define MAXVISPLANES_STEP2      512
++#define MAXVISPLANES_STEP3      768
++#define VISPLANE_EXPAND_THRESHOLD 0.9
++#define VISPLANE_MERGE_THRESHOLD  8
++
++visplane_t		visplanes[MAXVISPLANES_POOL];
++static int		visplane_limit = MAXVISPLANES_DEFAULT;
++static int		visplane_peak = 0;
++static int		visplane_merges = 0;
++static int		visplane_expansions = 0;
++
++#else
++
++// Fixed limit (increased from vanilla 128 for SIGIL)
++#define MAXVISPLANES	512
+ visplane_t		visplanes[MAXVISPLANES];
++
++#endif
++
+ visplane_t*		lastvisplane;
+ visplane_t*		floorplane;
+ visplane_t*		ceilingplane;
+@@ -204,6 +239,26 @@ void R_ClearPlanes (void)
+ 
+ 
+ 
++#ifdef ADAPTIVE_VISPLANES
++// Auto-expand visplane limit when approaching threshold
++static void R_ExpandVisplaneLimit(void)
++{
++    int new_limit = visplane_limit;
++    
++    if (visplane_limit < MAXVISPLANES_STEP1)
++        new_limit = MAXVISPLANES_STEP1;
++    else if (visplane_limit < MAXVISPLANES_STEP2)
++        new_limit = MAXVISPLANES_STEP2;
++    else if (visplane_limit < MAXVISPLANES_STEP3)
++        new_limit = MAXVISPLANES_STEP3;
++    
++    if (new_limit > visplane_limit) {
++        visplane_limit = new_limit;
++        visplane_expansions++;
++    }
++}
++#endif
++
+ //
+ // R_FindPlane
+ //
+@@ -214,6 +269,11 @@ R_FindPlane
+   int		lightlevel )
+ {
+     visplane_t*	check;
++#ifdef ADAPTIVE_VISPLANES
++    visplane_t* bestmatch = NULL;
++    int bestdiff = VISPLANE_MERGE_THRESHOLD + 1;
++    int current_count;
++#endif
+ 	
+     if (picnum == skyflatnum)
+     {
+@@ -227,11 +287,63 @@ R_FindPlane
+ 	    && picnum == check->picnum
+ 	    && lightlevel == check->lightlevel)
+ 	{
++#ifdef ADAPTIVE_VISPLANES
++	    return check;
++#else
+ 	    break;
++#endif
+ 	}
+     }
+     
+-			
++#ifdef ADAPTIVE_VISPLANES
++    // No exact match - need to allocate
++    current_count = lastvisplane - visplanes;
++    
++    // Auto-expand if approaching limit
++    if (current_count >= (int)(visplane_limit * VISPLANE_EXPAND_THRESHOLD))
++        R_ExpandVisplaneLimit();
++    
++    // At hard limit - graceful degradation
++    if (current_count >= visplane_limit && visplane_limit >= MAXVISPLANES_STEP3)
++    {
++        // Find closest match for merging
++        for (check=visplanes; check<lastvisplane; check++)
++        {
++            if (picnum == check->picnum)
++            {
++                int heightdiff = abs((height >> FRACBITS) - (check->height >> FRACBITS));
++                if (heightdiff < bestdiff)
++                {
++                    bestdiff = heightdiff;
++                    bestmatch = check;
++                }
++            }
++        }
++        
++        if (bestmatch && bestdiff <= VISPLANE_MERGE_THRESHOLD)
++        {
++            visplane_merges++;
++            return bestmatch;
++        }
++        
++        // Emergency: return any plane with same texture
++        for (check=visplanes; check<lastvisplane; check++)
++        {
++            if (picnum == check->picnum)
++            {
++                visplane_merges++;
++                return check;
++            }
++        }
++        visplane_merges++;
++        return visplanes;  // Last resort
++    }
++    
++    // Normal allocation
++    check = lastvisplane++;
++    if ((lastvisplane - visplanes) > visplane_peak)
++        visplane_peak = lastvisplane - visplanes;
++#else
+     if (check < lastvisplane)
+ 	return check;
+ 		
+@@ -239,6 +351,7 @@ R_FindPlane
+ 	I_Error ("R_FindPlane: no more visplanes");
+ 		
+     lastvisplane++;
++#endif
+ 
+     check->height = height;
+     check->picnum = picnum;
+@@ -266,6 +379,9 @@ R_CheckPlane
+     int		unionl;
+     int		unionh;
+     int		x;
++#ifdef ADAPTIVE_VISPLANES
++    int		current_count;
++#endif
+ 	
+     if (start < pl->minx)
+     {
+@@ -301,6 +417,23 @@ R_CheckPlane
+ 	// use the same one
+ 	return pl;		
+     }
++
++#ifdef ADAPTIVE_VISPLANES
++    current_count = lastvisplane - visplanes;
++    
++    // Auto-expand if approaching limit
++    if (current_count >= (int)(visplane_limit * VISPLANE_EXPAND_THRESHOLD))
++        R_ExpandVisplaneLimit();
++    
++    // At hard limit: reuse existing plane
++    if (current_count >= visplane_limit && visplane_limit >= MAXVISPLANES_STEP3)
++    {
++        visplane_merges++;
++        pl->minx = unionl;
++        pl->maxx = unionh;
++        return pl;
++    }
++#endif
+ 	
+     // make a new visplane
+     lastvisplane->height = pl->height;
+@@ -308,6 +441,10 @@ R_CheckPlane
+     lastvisplane->lightlevel = pl->lightlevel;
+     
+     pl = lastvisplane++;
++#ifdef ADAPTIVE_VISPLANES
++    if ((lastvisplane - visplanes) > visplane_peak)
++        visplane_peak = lastvisplane - visplanes;
++#endif
+     pl->minx = start;
+     pl->maxx = stop;
+ 
+@@ -371,9 +508,15 @@ void R_DrawPlanes (void)
+ 	I_Error ("R_DrawPlanes: drawsegs overflow (%i)",
+ 		 ds_p - drawsegs);
+     
++#ifdef ADAPTIVE_VISPLANES
++    if (lastvisplane - visplanes > MAXVISPLANES_POOL)
++	I_Error ("R_DrawPlanes: visplane overflow (%i)",
++		 lastvisplane - visplanes);
++#else
+     if (lastvisplane - visplanes > MAXVISPLANES)
+ 	I_Error ("R_DrawPlanes: visplane overflow (%i)",
+ 		 lastvisplane - visplanes);
++#endif
+     
+     if (lastopening - openings > MAXOPENINGS)
+ 	I_Error ("R_DrawPlanes: opening overflow (%i)",
+diff --git a/doomgeneric/r_things.c b/doomgeneric/r_things.c
+index 74e7369..d207de8 100644
+--- a/doomgeneric/r_things.c
++++ b/doomgeneric/r_things.c
+@@ -278,7 +278,12 @@ void R_InitSpriteDefs (char** namelist)
+ //
+ // GAME FUNCTIONS
+ //
++#ifdef CACHE_ALIGN_ARRAYS
++// PAGER OPTIMIZATION: Cache-align hot arrays for MIPS 24KEc (32-byte cache lines)
++vissprite_t	vissprites[MAXVISSPRITES] __attribute__((aligned(32)));
++#else
+ vissprite_t	vissprites[MAXVISSPRITES];
++#endif
+ vissprite_t*	vissprite_p;
+ int		newvissprite;
+ 
+diff --git a/doomgeneric/r_things.h b/doomgeneric/r_things.h
+index 256a5eb..70e10bf 100644
+--- a/doomgeneric/r_things.h
++++ b/doomgeneric/r_things.h
+@@ -22,7 +22,7 @@
+ 
+ 
+ 
+-#define MAXVISSPRITES  	128
++#define MAXVISSPRITES  	256  // Increased from 128 for complex maps
+ 
+ extern vissprite_t	vissprites[MAXVISSPRITES];
+ extern vissprite_t*	vissprite_p;
 diff --git a/doomgeneric/v_video.c b/doomgeneric/v_video.c
-index 1234567..abcdefg 100644
+index 6db28aa..b7a36cd 100644
 --- a/doomgeneric/v_video.c
 +++ b/doomgeneric/v_video.c
-@@ -43,8 +43,9 @@
+@@ -42,8 +42,9 @@
  #endif
-
+ 
  // TODO: There are separate RANGECHECK defines for different games, but this
 -// is common code. Fix this.
 -#define RANGECHECK
 +// is common code. Fix this. 
 +// Disabled for BFG Edition compatibility (560px wide title screens)
 +// #define RANGECHECK
-
+ 
  // Blending table used for fuzzpatch, etc.
  // Only used in Heretic/Hexen
-
+@@ -137,7 +138,7 @@ void V_SetPatchClipCallback(vpatchclipfunc_t func)
+ //
+ 
+ void V_DrawPatch(int x, int y, patch_t *patch)
+-{ 
++{
+     int count;
+     int col;
+     column_t *column;
+@@ -156,38 +157,64 @@ void V_DrawPatch(int x, int y, patch_t *patch)
+             return;
+     }
+ 
+-#ifdef RANGECHECK
+-    if (x < 0
+-     || x + SHORT(patch->width) > SCREENWIDTH
+-     || y < 0
+-     || y + SHORT(patch->height) > SCREENHEIGHT)
+-    {
+-        I_Error("Bad V_DrawPatch x=%i y=%i patch.width=%i patch.height=%i topoffset=%i leftoffset=%i", x, y, patch->width, patch->height, patch->topoffset, patch->leftoffset);
+-    }
+-#endif
++    w = SHORT(patch->width);
+ 
+-    V_MarkRect(x, y, SHORT(patch->width), SHORT(patch->height));
++    // BFG Edition support: Center oversized patches horizontally
++    if (w > SCREENWIDTH) {
++        x -= (w - SCREENWIDTH) / 2;
++    }
+ 
+-    col = 0;
++    // Set up base destination - this is where column 0 would go
+     desttop = dest_screen + y * SCREENWIDTH + x;
+ 
+-    w = SHORT(patch->width);
+-
+-    for ( ; col<w ; x++, col++, desttop++)
++    for (col = 0; col < w; col++, x++, desttop++)
+     {
++        // Skip columns that are off-screen left
++        if (x < 0)
++            continue;
++        // Stop if we've gone off-screen right
++        if (x >= SCREENWIDTH)
++            break;
++
+         column = (column_t *)((byte *)patch + LONG(patch->columnofs[col]));
+ 
+         // step through the posts in a column
+         while (column->topdelta != 0xff)
+         {
++            int post_y = y + column->topdelta;
++            int post_length = column->length;
++            int draw_y = post_y;
++            int draw_count = post_length;
++            int src_skip = 0;
++
+             source = (byte *)column + 3;
+-            dest = desttop + column->topdelta*SCREENWIDTH;
+-            count = column->length;
+ 
+-            while (count--)
++            // Clip top
++            if (draw_y < 0)
+             {
+-                *dest = *source++;
+-                dest += SCREENWIDTH;
++                src_skip = -draw_y;
++                draw_count -= src_skip;
++                draw_y = 0;
++            }
++
++            // Clip bottom
++            if (draw_y + draw_count > SCREENHEIGHT)
++            {
++                draw_count = SCREENHEIGHT - draw_y;
++            }
++
++            // Draw if anything visible
++            if (draw_count > 0)
++            {
++                source += src_skip;
++                dest = dest_screen + draw_y * SCREENWIDTH + x;
++                count = draw_count;
++
++                while (count--)
++                {
++                    *dest = *source++;
++                    dest += SCREENWIDTH;
++                }
+             }
+             column = (column_t *)((byte *)column + column->length + 4);
+         }
+@@ -203,15 +230,15 @@ void V_DrawPatch(int x, int y, patch_t *patch)
+ void V_DrawPatchFlipped(int x, int y, patch_t *patch)
+ {
+     int count;
+-    int col; 
+-    column_t *column; 
++    int col;
++    column_t *column;
+     byte *desttop;
+     byte *dest;
+-    byte *source; 
+-    int w; 
+- 
+-    y -= SHORT(patch->topoffset); 
+-    x -= SHORT(patch->leftoffset); 
++    byte *source;
++    int w;
++
++    y -= SHORT(patch->topoffset);
++    x -= SHORT(patch->leftoffset);
+ 
+     // haleyjd 08/28/10: Strife needs silent error checking here.
+     if(patchclip_callback)
+@@ -220,38 +247,64 @@ void V_DrawPatchFlipped(int x, int y, patch_t *patch)
+             return;
+     }
+ 
+-#ifdef RANGECHECK 
+-    if (x < 0
+-     || x + SHORT(patch->width) > SCREENWIDTH
+-     || y < 0
+-     || y + SHORT(patch->height) > SCREENHEIGHT)
+-    {
+-        I_Error("Bad V_DrawPatchFlipped");
+-    }
+-#endif
++    w = SHORT(patch->width);
+ 
+-    V_MarkRect (x, y, SHORT(patch->width), SHORT(patch->height));
++    // BFG Edition support: Center oversized patches horizontally
++    if (w > SCREENWIDTH) {
++        x -= (w - SCREENWIDTH) / 2;
++    }
+ 
+-    col = 0;
++    // Set up base destination
+     desttop = dest_screen + y * SCREENWIDTH + x;
+ 
+-    w = SHORT(patch->width);
+-
+-    for ( ; col<w ; x++, col++, desttop++)
++    for (col = 0; col < w; col++, x++, desttop++)
+     {
++        // Skip columns that are off-screen left
++        if (x < 0)
++            continue;
++        // Stop if we've gone off-screen right
++        if (x >= SCREENWIDTH)
++            break;
++
+         column = (column_t *)((byte *)patch + LONG(patch->columnofs[w-1-col]));
+ 
+         // step through the posts in a column
+-        while (column->topdelta != 0xff )
++        while (column->topdelta != 0xff)
+         {
++            int post_y = y + column->topdelta;
++            int post_length = column->length;
++            int draw_y = post_y;
++            int draw_count = post_length;
++            int src_skip = 0;
++
+             source = (byte *)column + 3;
+-            dest = desttop + column->topdelta*SCREENWIDTH;
+-            count = column->length;
+ 
+-            while (count--)
++            // Clip top
++            if (draw_y < 0)
+             {
+-                *dest = *source++;
+-                dest += SCREENWIDTH;
++                src_skip = -draw_y;
++                draw_count -= src_skip;
++                draw_y = 0;
++            }
++
++            // Clip bottom
++            if (draw_y + draw_count > SCREENHEIGHT)
++            {
++                draw_count = SCREENHEIGHT - draw_y;
++            }
++
++            // Draw if anything visible
++            if (draw_count > 0)
++            {
++                source += src_skip;
++                dest = dest_screen + draw_y * SCREENWIDTH + x;
++                count = draw_count;
++
++                while (count--)
++                {
++                    *dest = *source++;
++                    dest += SCREENWIDTH;
++                }
+             }
+             column = (column_t *)((byte *)column + column->length + 4);
+         }

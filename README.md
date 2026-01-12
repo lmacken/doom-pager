@@ -190,20 +190,22 @@ The vanilla DOOM engine has [static limits](https://doomwiki.org/wiki/Static_lim
 
 **Performance Optimizations**
 
-| Optimization | Description |
-|--------------|-------------|
-| **RGB565 Palette Precomputation** | 256-entry palette converted to RGB565 once at load time, not per-pixel |
-| **4-Pixel Loop Unrolling** | Inner render loop processes 4 pixels per iteration |
-| **Direct I_VideoBuffer Access** | Skips redundant buffer copy in `I_FinishUpdate()` |
-| **Cache-Aligned Tables** | Lookup tables aligned to 32-byte cache lines via `posix_memalign()` |
-| **Cache Prefetch** | `__builtin_prefetch()` for L1 cache - prefetches next row and 16 pixels ahead (use `-noprefetch` to disable) |
-| **Binary Stripping** | Debug symbols removed (758KB vs 1.4MB) |
+| Optimization | Impact | Notes |
+|--------------|--------|-------|
+| **Link-Time Optimization (LTO)** | -10% binary, -17% wasted cycles | Cross-module inlining, better branch delay slot utilization |
+| **RGB565 Palette Precomputation** | Faster render | 256-entry palette converted to RGB565 once at load |
+| **4-Pixel Loop Unrolling** | Faster render | Inner render loop processes 4 pixels per iteration |
+| **Cache-Aligned Tables** | Fewer cache misses | Lookup tables aligned to 32-byte cache lines |
+| **Manual Render Prefetch** | 5-15% render | `__builtin_prefetch()` for next row and 16 pixels ahead |
+| **mobj_t Cache Layout** | Fewer cache misses | Hot fields grouped in first 3 cache lines |
+| **Binary Stripping** | 685KB vs 1.4MB | Debug symbols removed |
+
+> ⚠️ **Note**: GCC's `-fprefetch-loop-arrays` is **disabled** - our testing found it causes 45ms display stalls when combined with manual prefetching (23 FPS vs 35 FPS). See [perf/OPTIMIZATION_RESEARCH.md](perf/OPTIMIZATION_RESEARCH.md) for details.
 
 **Compiler Flags (MIPS 24KEc Tuned)**
 ```
--O3 -march=24kec -mtune=24kec -mdsp -mbranch-likely
--fomit-frame-pointer -ffast-math -funroll-loops
--fno-strict-aliasing -fno-exceptions
+-O3 -flto -march=24kec -mtune=24kec -mbranch-likely
+-fomit-frame-pointer -ffast-math -funroll-loops -finline-functions
 ```
 
 ### Payload Optimizations
