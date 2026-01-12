@@ -36,7 +36,9 @@ LOG ""
 LOG "Press any button to start..."
 sleep 0.1
 WAIT_FOR_INPUT >/dev/null 2>&1
-LOG "LOADING..."
+
+# Show spinner while loading
+SPINNER_ID=$(START_SPINNER "Loading DOOM...")
 
 # Stop services to free CPU/memory
 /etc/init.d/php8-fpm stop 2>/dev/null
@@ -44,7 +46,10 @@ LOG "LOADING..."
 /etc/init.d/bluetoothd stop 2>/dev/null
 /etc/init.d/pineapplepager stop 2>/dev/null
 /etc/init.d/pineapd stop 2>/dev/null
-sleep 1
+
+# Stop spinner before taking over framebuffer
+STOP_SPINNER "$SPINNER_ID" 2>/dev/null
+sleep 0.5
 
 # Run DOOM
 ./doomgeneric -iwad "$WAD_FILE" >/tmp/doom.log 2>&1

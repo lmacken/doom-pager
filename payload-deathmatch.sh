@@ -111,13 +111,19 @@ LOG "Press any button..."
 sleep 0.1
 WAIT_FOR_INPUT >/dev/null 2>&1
 
+# Show spinner while loading
+SPINNER_ID=$(START_SPINNER "Loading DOOM...")
+
 # Stop services
 /etc/init.d/php8-fpm stop 2>/dev/null
 /etc/init.d/nginx stop 2>/dev/null
 /etc/init.d/bluetoothd stop 2>/dev/null
 /etc/init.d/pineapplepager stop 2>/dev/null
 /etc/init.d/pineapd stop 2>/dev/null
-sleep 1
+
+# Stop spinner before taking over framebuffer
+STOP_SPINNER "$SPINNER_ID" 2>/dev/null
+sleep 0.5
 
 # Parse map format
 EPISODE=$(echo "$MAP" | sed -n 's/^E\([0-9]\)M[0-9]$/\1/p')
