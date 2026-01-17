@@ -14,7 +14,7 @@ RELEASE_DIR_DM="$SCRIPT_DIR/payloads/user/games/doom-deathmatch"
 PAGER="${PAGER_HOST:-root@172.16.52.1}"
 DEST="/root/payloads/user/games"
 
-SDK_URL="https://downloads.openwrt.org/releases/22.03.5/targets/ramips/mt76x8/openwrt-sdk-22.03.5-ramips-mt76x8_gcc-11.2.0_musl.Linux-x86_64.tar.xz"
+SDK_URL="https://downloads.openwrt.org/releases/24.10.0/targets/ramips/mt76x8/openwrt-sdk-24.10.0-ramips-mt76x8_gcc-13.3.0_musl.Linux-x86_64.tar.zst"
 DOOMGENERIC_REPO="https://github.com/lmacken/doomgeneric-pager.git"
 DOOMGENERIC_BRANCH="pager"
 WAD_URL="https://distro.ibiblio.org/slitaz/sources/packages/d/doom1.wad"
@@ -134,10 +134,13 @@ fi
 mkdir -p "$BUILD_DIR"
 
 # 1. OpenWrt SDK
-if [ ! -f "$BUILD_DIR/openwrt-sdk/staging_dir/toolchain-mipsel_24kc_gcc-11.2.0_musl/bin/mipsel-openwrt-linux-musl-gcc" ]; then
-    echo "[1/6] Downloading OpenWrt SDK..."
+if [ ! -f "$BUILD_DIR/openwrt-sdk/staging_dir/toolchain-mipsel_24kc_gcc-13.3.0_musl/bin/mipsel-openwrt-linux-musl-gcc" ]; then
+    echo "[1/6] Downloading OpenWrt SDK (24.10, GCC 13.3)..."
     rm -rf "$BUILD_DIR/openwrt-sdk"
-    curl -L "$SDK_URL" | tar -xJ -C "$BUILD_DIR"
+    curl -L "$SDK_URL" -o "$BUILD_DIR/sdk.tar.zst"
+    zstd -d "$BUILD_DIR/sdk.tar.zst" -o "$BUILD_DIR/sdk.tar"
+    tar -xf "$BUILD_DIR/sdk.tar" -C "$BUILD_DIR"
+    rm "$BUILD_DIR/sdk.tar.zst" "$BUILD_DIR/sdk.tar"
     mv "$BUILD_DIR"/openwrt-sdk-* "$BUILD_DIR/openwrt-sdk"
 else
     echo "[1/6] SDK ready"
@@ -182,7 +185,11 @@ echo "[4/6] Building..."
 # LTO requires the native SDK compiler (not QEMU wrapper)
 export OPENWRT_SDK="$BUILD_DIR/openwrt-sdk"
 export STAGING_DIR="$OPENWRT_SDK/staging_dir"
-export PATH="$OPENWRT_SDK/staging_dir/toolchain-mipsel_24kc_gcc-11.2.0_musl/bin:$PATH"
+export PATH="$OPENWRT_SDK/staging_dir/toolchain-mipsel_24kc_gcc-13.3.0_musl/bin:$PATH"
+
+# The SDK's toolchain wrappers try to LD_PRELOAD runas.so (x86-64) which fails on ARM64 hosts.
+# It's only used for cosmetic argv[0] in error messages - safe to skip.
+unset LD_PRELOAD
 
 # Clean and build with optimal flags:
 # - LTO enabled (default in Makefile)
