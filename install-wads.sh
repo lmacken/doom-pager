@@ -359,7 +359,7 @@ create_payload() {
 # Title: $title
 # Description: $desc
 # Author: @lmacken
-# Version: 1.0
+# Version: 1.3
 # Category: Games
 
 PAYLOAD_DIR="/root/payloads/user/games/$name"
@@ -369,31 +369,35 @@ cd "\$PAYLOAD_DIR" || {
     exit 1
 }
 
-# Verify required files exist
 [ ! -f "./doomgeneric" ] && {
     LOG red "ERROR: doomgeneric not found"
     exit 1
 }
 chmod +x ./doomgeneric
 
-LOG "$desc"
-LOG ""
-LOG "D-pad=Move  Red=Fire"
-LOG "Green+Up=Use  Green+L/R=Strafe"
-LOG "Red+Green=Quit"
-LOG ""
-LOG "Press any button..."
+# Display controls
+LOG "$title
+
+D-pad=Move  Red=Fire  Power=Weapon
+Green+Up=Use  Green+L/R=Strafe
+Green+Pwr=Save  Red+Pwr=Load
+Red+Green=Menu
+
+Press any button to start..."
 WAIT_FOR_INPUT >/dev/null 2>&1
 
-# Stop services to free CPU and memory for DOOM
+# Show loading spinner
+SPINNER_ID=\$(START_SPINNER "Loading $title...")
+
+# Stop services to free CPU/memory
 /etc/init.d/php8-fpm stop 2>/dev/null
 /etc/init.d/nginx stop 2>/dev/null
 /etc/init.d/bluetoothd stop 2>/dev/null
 /etc/init.d/pineapplepager stop 2>/dev/null
 /etc/init.d/pineapd stop 2>/dev/null
-echo 3 > /proc/sys/vm/drop_caches 2>/dev/null
 
-sleep 1
+STOP_SPINNER "\$SPINNER_ID" 2>/dev/null
+sleep 0.5
 
 # Build command line
 DOOM_ARGS="-iwad \"\$PAYLOAD_DIR/$iwad_basename\""
@@ -409,17 +413,15 @@ PAYLOAD
     # Complete the payload script
     cat >> "$payload_dir/payload.sh" << 'PAYLOAD'
 
-# Run DOOM
 eval "$PAYLOAD_DIR/doomgeneric $DOOM_ARGS" >/tmp/doom.log 2>&1
 
-# Restore services after DOOM exits
+# Restore services
 /etc/init.d/php8-fpm start 2>/dev/null &
 /etc/init.d/nginx start 2>/dev/null &
 /etc/init.d/bluetoothd start 2>/dev/null &
 /etc/init.d/pineapplepager start 2>/dev/null &
 /etc/init.d/pineapd start 2>/dev/null &
 
-LOG ""
 LOG "DOOM exited. Press any button..."
 WAIT_FOR_INPUT >/dev/null 2>&1
 PAYLOAD
