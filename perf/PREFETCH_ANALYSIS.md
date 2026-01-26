@@ -44,14 +44,14 @@ But we actually need `srcBuf[0*320 + srcX]` = `srcBuf[srcX]`!
 
 | Variant | Pref Instructions | Performance |
 |---------|-------------------|-------------|
-| No prefetch | 1 | **FASTEST** |
-| GCC -fprefetch-loop-arrays | 150 | Marginal benefit |
-| Manual render prefetch | 5 | **35% SLOWER** |
+| No prefetch | 1 | Baseline |
+| GCC -fprefetch-loop-arrays | ~140 | **Recommended** (helps game logic) |
+| Manual render prefetch | 5 | **35% SLOWER** (disabled) |
 
 ## Recommendation
 
-1. **Disable manual render prefetch** (default now)
-2. **Consider GCC auto-prefetch** for game logic loops
+1. **Disable manual render prefetch** (default, proven 35% slower)
+2. **Enable GCC auto-prefetch** (`-fprefetch-loop-arrays`) - helps game logic loops
 3. **Measure before optimizing** - intuition was wrong!
 
 ## When Prefetch DOES Help

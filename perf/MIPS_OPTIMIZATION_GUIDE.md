@@ -1,20 +1,23 @@
 # MIPS 24KEc Optimization Guide for WiFi Pineapple Pager
 
-**Target:** MIPS 24KEc @ 580MHz, 128MB RAM, 32KB L1 I-cache, 32KB L1 D-cache  
+**Target:** MIPS 24KEc @ 580MHz, 64MB RAM, 32KB L1 I-cache, 32KB L1 D-cache  
 **Display:** ST7796U 222x480 RGB565 via SPI (~10ms transfer)  
-**Toolchain:** OpenWrt SDK GCC 11.2.0 (mipsel-openwrt-linux-musl)
+**Toolchain:** OpenWrt SDK 24.10, GCC 13.3.0 (mipsel-openwrt-linux-musl)
 
 This document presents quantitative findings from A/B testing DOOM on the WiFi Pineapple Pager. All conclusions are backed by microbenchmarks with real framebuffer writes.
 
 ---
 
-## TL;DR - Optimal Compiler Flags
+## TL;DR - Optimal Compiler Flags (GCC 13.3)
 
 ```makefile
 CFLAGS += -O3 -flto
 CFLAGS += -march=24kec -mtune=24kec -mbranch-likely
 CFLAGS += -fprefetch-loop-arrays
 CFLAGS += -ffast-math -funroll-loops -fomit-frame-pointer -finline-functions
+# GCC 13 interprocedural optimizations
+CFLAGS += -fipa-pta -fmodulo-sched -fmodulo-sched-allow-regmoves
+CFLAGS += -fsched-pressure -fsplit-paths
 LDFLAGS += -flto -static
 ```
 
@@ -22,6 +25,7 @@ LDFLAGS += -flto -static
 - `-mno-dsp` (11% slower render)
 - Manual `__builtin_prefetch` in lookup-table loops (35% slower!)
 - `-DINLINE_FIXED_MATH` (I-cache bloat)
+- AI throttling (causes massive frame drops)
 
 ---
 
@@ -104,8 +108,8 @@ mipsel-openwrt-linux-musl-gcc -march=24kec -Q --help=target | grep dsp
 Count DSP instructions in binary:
 ```bash
 mipsel-linux-gnu-objdump -d doomgeneric | grep -c "lwx\|lbux"
-# Without LTO: 118
-# With LTO:    1002 (LTO enables cross-file optimization!)
+# Without LTO: ~120
+# With LTO:    ~1000 (LTO enables cross-file optimization!)
 ```
 
 ---
@@ -116,8 +120,8 @@ LTO allows GCC to optimize across compilation units, dramatically increasing DSP
 
 | Build | Text Size | DSP Instructions |
 |-------|-----------|------------------|
-| Without LTO | 676KB | 118 |
-| **With LTO** | **630KB** | **1002** |
+| Without LTO | ~750KB | ~120 |
+| **With LTO** | **~700KB** | **~1000** |
 
 ### Why LTO Matters So Much
 
@@ -143,17 +147,17 @@ LTO requires **the same compiler** for both compilation and linking. On x86_64 L
 
 ```bash
 # Download OpenWrt SDK for ramips/mt76x8 (MIPS 24K target)
-SDK_URL="https://downloads.openwrt.org/releases/22.03.5/targets/ramips/mt76x8/openwrt-sdk-22.03.5-ramips-mt76x8_gcc-11.2.0_musl.Linux-x86_64.tar.xz"
+SDK_URL="https://downloads.openwrt.org/releases/24.10.0/targets/ramips/mt76x8/openwrt-sdk-24.10.0-ramips-mt76x8_gcc-13.3.0_musl.Linux-x86_64.tar.xz"
 curl -L "$SDK_URL" | tar -xJ
 
 # Set up environment
-export SDK="$(pwd)/openwrt-sdk-22.03.5-ramips-mt76x8_gcc-11.2.0_musl.Linux-x86_64"
+export SDK="$(pwd)/openwrt-sdk-24.10.0-ramips-mt76x8_gcc-13.3.0_musl.Linux-x86_64"
 export STAGING_DIR="$SDK/staging_dir"
-export PATH="$SDK/staging_dir/toolchain-mipsel_24kc_gcc-11.2.0_musl/bin:$PATH"
+export PATH="$SDK/staging_dir/toolchain-mipsel_24kc_gcc-13.3.0_musl/bin:$PATH"
 
 # Verify compiler works
 mipsel-openwrt-linux-musl-gcc --version
-# mipsel-openwrt-linux-musl-gcc (OpenWrt GCC 11.2.0) 11.2.0
+# mipsel-openwrt-linux-musl-gcc (OpenWrt GCC 13.3.0) 13.3.0
 ```
 
 ### Enabling LTO
@@ -193,7 +197,7 @@ GCC's `-fprefetch-loop-arrays` inserts prefetch instructions for loops with pred
 ```bash
 # Count prefetch instructions
 mipsel-linux-gnu-objdump -d doomgeneric | grep -c "pref"
-# Result: 149 prefetch instructions
+# Result: ~140 prefetch instructions
 ```
 
 These help:
@@ -293,13 +297,13 @@ CFLAGS += -mfix-24k  # Adds 9KB, probably slower
 
 ## 6. Final Optimized Configuration
 
-### Makefile.mipsel
+### Makefile.mipsel (GCC 13.3)
 
 ```makefile
 # Compiler
 CC = mipsel-openwrt-linux-musl-gcc
 
-# Architecture (enables DSP ASE automatically)
+# Architecture (enables DSP ASE automatically via 'e' in 24kec)
 CFLAGS += -march=24kec -mtune=24kec -mbranch-likely
 
 # Optimization
@@ -307,12 +311,12 @@ CFLAGS += -O3 -flto
 CFLAGS += -ffast-math -funroll-loops -fomit-frame-pointer
 CFLAGS += -finline-functions
 
-# GCC auto-prefetch (149 instructions across all loops)
+# GCC auto-prefetch (~140 instructions across all loops)
 CFLAGS += -fprefetch-loop-arrays
 
-# Cache parameters for MIPS 24KEc
-CFLAGS += --param=l1-cache-size=16
-CFLAGS += --param=l1-cache-line-size=32
+# GCC 13 interprocedural optimizations
+CFLAGS += -fipa-pta -fmodulo-sched -fmodulo-sched-allow-regmoves
+CFLAGS += -fsched-pressure -fsplit-paths
 
 # Linking
 LDFLAGS += -flto -static
@@ -324,14 +328,14 @@ LDFLAGS += -flto -static
 # Set up OpenWrt SDK
 export SDK="/path/to/openwrt-sdk"
 export STAGING_DIR="$SDK/staging_dir"
-export PATH="$SDK/staging_dir/toolchain-mipsel_24kc_gcc-11.2.0_musl/bin:$PATH"
+export PATH="$SDK/staging_dir/toolchain-mipsel_24kc_gcc-13.3.0_musl/bin:$PATH"
 
 # Build
 make -f Makefile.mipsel CC=mipsel-openwrt-linux-musl-gcc -j4
 
 # Verify optimizations
 mipsel-linux-gnu-objdump -d doomgeneric | grep -c "lwx\|lbux"  # Should be ~1000
-mipsel-linux-gnu-objdump -d doomgeneric | grep -c "pref"       # Should be ~150
+mipsel-linux-gnu-objdump -d doomgeneric | grep -c "pref"       # Should be ~140
 ```
 
 ---
@@ -380,20 +384,19 @@ void benchmark(int iterations) {
 | DSP ASE (lwx/lbux) | **+11% render** | ✅ ON (via -march=24kec) |
 | LTO | **-7% size, +8x DSP** | ✅ ON |
 | GCC prefetch | **+1-2% overall** | ✅ ON |
+| GCC 13 IPA opts | **Better cross-function opt** | ✅ ON |
+| Precomputed row offsets | **Eliminates multiply** | ✅ ON |
 | Manual render prefetch | **-35% render** | ❌ OFF |
 | INLINE_FIXED_MATH | **-5% (I-cache)** | ❌ OFF |
+| AI throttling | **Broken (min 8 FPS)** | ❌ OFF |
 | -mfix-24k | **+9KB size** | ❌ OFF |
 
-### Final Binary Stats
+### Final Binary Stats (v6.0, GCC 13.3)
 
 ```
-Text:    630,296 bytes
-Data:     58,168 bytes
-BSS:     525,232 bytes
-Total: 1,213,696 bytes
-
-DSP instructions:      1,002
-Prefetch instructions:   149
+Binary size:          ~707KB (stripped)
+DSP instructions:     ~1000
+Prefetch instructions: ~140
 ```
 
 ---
@@ -415,6 +418,7 @@ The MIPS 24KEc in the WiFi Pineapple Pager has untapped potential:
 ```makefile
 # Add these to any MIPS 24K project for free performance:
 CFLAGS += -march=24kec -mtune=24kec -flto -fprefetch-loop-arrays
+CFLAGS += -fipa-pta -fmodulo-sched -fsched-pressure -fsplit-paths  # GCC 13+
 LDFLAGS += -flto
 ```
 
@@ -430,20 +434,20 @@ LDFLAGS += -flto
 ### Clone and Build
 
 ```bash
-git clone --recursive https://github.com/your/doom-pager
+git clone --recursive https://github.com/lmacken/doom-pager
 cd doom-pager/doomgeneric/doomgeneric
 
 # Set up SDK
-export SDK="/path/to/openwrt-sdk-mipsel_24kc"
+export SDK="/path/to/openwrt-sdk-24.10.0-ramips-mt76x8_gcc-13.3.0_musl.Linux-x86_64"
 export STAGING_DIR="$SDK/staging_dir"
-export PATH="$SDK/staging_dir/toolchain-mipsel_24kc_gcc-11.2.0_musl/bin:$PATH"
+export PATH="$SDK/staging_dir/toolchain-mipsel_24kc_gcc-13.3.0_musl/bin:$PATH"
 
 # Build optimized
 make -f Makefile.mipsel CC=mipsel-openwrt-linux-musl-gcc -j4
 
 # Verify
-mipsel-linux-gnu-objdump -d doomgeneric | grep -c "lwx\|lbux"  # ~1002
-mipsel-linux-gnu-objdump -d doomgeneric | grep -c "pref"       # ~149
+mipsel-linux-gnu-objdump -d doomgeneric | grep -c "lwx\|lbux"  # ~1000
+mipsel-linux-gnu-objdump -d doomgeneric | grep -c "pref"       # ~140
 ```
 
 ### Run Benchmarks
@@ -532,5 +536,5 @@ addiu t1, t1, 1         ; only executes if branch taken (not wasted)
 
 ---
 
-*Last updated: January 2026*  
+*Last updated: January 2026 (v6.0, GCC 13.3, OpenWrt SDK 24.10)*  
 *Tested on WiFi Pineapple Pager hardware with DOOM 1.9 shareware*

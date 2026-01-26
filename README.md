@@ -80,10 +80,13 @@ Then find DOOM in: **Payloads → Games → DOOM**
 |-------|--------|
 | D-pad | Move/Turn |
 | Red | Fire |
+| Power | Next Weapon |
 | Green | Select (menus) |
 | Green + Up | Open doors/Use |
 | Green + Down | Automap |
 | Green + Left/Right | Strafe |
+| Green + Power | Quicksave |
+| Red + Power | Quickload |
 | Red + Green | ESC (Menu/Quit) |
 
 ### USB Keyboard Support
@@ -178,7 +181,7 @@ The vanilla DOOM engine has [static limits](https://doomwiki.org/wiki/Static_lim
 
 **Frame Pacing**
 - Default 35 FPS cap matches DOOM's native [TICRATE](https://doomwiki.org/wiki/Tic)
-- `usleep()`-based frame timing for consistent pacing
+- `clock_nanosleep()` with absolute timing for precise frame pacing
 - Reduces CPU usage and heat compared to uncapped rendering
 - Display limited to ~20 FPS via SPI, but 35 FPS ensures smooth game logic
 
@@ -190,22 +193,25 @@ The vanilla DOOM engine has [static limits](https://doomwiki.org/wiki/Static_lim
 
 **Performance Optimizations**
 
-| Optimization | Impact | Notes |
+| Optimization | Status | Notes |
 |--------------|--------|-------|
-| **Link-Time Optimization (LTO)** | -10% binary, -17% wasted cycles | Cross-module inlining, better branch delay slot utilization |
-| **RGB565 Palette Precomputation** | Faster render | 256-entry palette converted to RGB565 once at load |
-| **4-Pixel Loop Unrolling** | Faster render | Inner render loop processes 4 pixels per iteration |
-| **Cache-Aligned Tables** | Fewer cache misses | Lookup tables aligned to 32-byte cache lines |
-| **Manual Render Prefetch** | 5-15% render | `__builtin_prefetch()` for next row and 16 pixels ahead |
-| **mobj_t Cache Layout** | Fewer cache misses | Hot fields grouped in first 3 cache lines |
-| **Binary Stripping** | 685KB vs 1.4MB | Debug symbols removed |
+| **Link-Time Optimization (LTO)** | ON | Cross-module inlining, 10% smaller binary |
+| **GCC Auto-Prefetch** | ON | `-fprefetch-loop-arrays` adds ~140 prefetch instructions |
+| **GCC 13 IPA Optimizations** | ON | `-fipa-pta`, `-fmodulo-sched`, `-fsched-pressure`, `-fsplit-paths` |
+| **Precomputed Row Offsets** | ON | Eliminates multiply in inner render loop |
+| **RGB565 Palette Precomputation** | ON | 256-entry palette converted to RGB565 once at load |
+| **4-Pixel Loop Unrolling** | ON | Inner render loop processes 4 pixels per iteration |
+| **Cache-Aligned Tables** | ON | Lookup tables aligned to 32-byte cache lines |
+| **DSP Indexed Loads** | ON | ~1000 `lbux`/`lwx` instructions (`-march=24kec` auto-enables `-mdsp`) |
+| **mobj_t Cache Layout** | ON | Hot fields grouped in first 2 cache lines |
+| **Binary Stripping** | ON | ~700KB vs 1.4MB with debug symbols |
 
-> ⚠️ **Note**: GCC's `-fprefetch-loop-arrays` is **disabled** - our testing found it causes 45ms display stalls when combined with manual prefetching (23 FPS vs 35 FPS). See [perf/OPTIMIZATION_RESEARCH.md](perf/OPTIMIZATION_RESEARCH.md) for details.
-
-**Compiler Flags (MIPS 24KEc Tuned)**
+**Compiler Flags (MIPS 24KEc @ 580MHz, GCC 13.3)**
 ```
 -O3 -flto -march=24kec -mtune=24kec -mbranch-likely
--fomit-frame-pointer -ffast-math -funroll-loops -finline-functions
+-ffast-math -funroll-loops -fomit-frame-pointer -finline-functions
+-fprefetch-loop-arrays
+-fipa-pta -fmodulo-sched -fsched-pressure -fsplit-paths
 ```
 
 ### Payload Optimizations
